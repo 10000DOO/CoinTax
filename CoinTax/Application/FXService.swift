@@ -137,6 +137,30 @@ final class FXService {
         return missingDays(for: events, project: project)
     }
 
+    /// 환율 CSV: day,rate 또는 date,USD/KRW,rate 또는 date,currency,rate
+    func importRatesCSV(text: String, project: ProjectEntity) throws -> Int {
+        let rows = CSVUtil.parseLines(text)
+        guard let header = rows.first else { return 0 }
+        let lower = header.map { $0.lowercased().trimmingCharacters(in: .whitespaces) }
+        func idx(_ names: [String]) -> Int? {
+            for n in names {
+                if let i = lower.firstIndex(of: n) { return i }
+            }
+            return nil
+        }
+        let dayI = idx(["day", "date", "날짜", "yyyy-mm-dd"]) ?? 0
+        let rateI = idx(["rate", "환율", "usd/krw", "value"]) ?? (header.count > 1 ? header.count - 1 : 1)
+        var n = 0
+        for row in rows.dropFirst() {
+            guard dayI < row.count, rateI < row.count else { continue }
+            let day = row[dayI].trimmingCharacters(in: .whitespaces)
+            guard day.count >= 8, let rate = Money.parseDecimal(row[rateI]), rate > 0 else { continue }
+            try setRate(day: day, rate: rate, project: project, source: "csv", sourceDate: day)
+            n += 1
+        }
+        return n
+    }
+
     private func expandLookback(days: [String], back: Int) -> [String] {
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = TaxTime.seoul

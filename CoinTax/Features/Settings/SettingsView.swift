@@ -1,5 +1,6 @@
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var env: AppEnvironment
@@ -11,6 +12,7 @@ struct SettingsView: View {
     @State private var autoFX = FXPreferences.autoFetchEnabled
     @State private var ecosKey = FXKeychain.loadECOSKey() ?? ""
     @State private var showManual = false
+    @State private var isFXCSVImporter = false
 
     var body: some View {
         ScrollView {
@@ -70,6 +72,8 @@ struct SettingsView: View {
                         }
                         .help("누락일을 원격에서 채웁니다 (자동 설정이 꺼져 있어도 한 번 실행 가능)")
 
+                        Button("환율 CSV import…") { isFXCSVImporter = true }
+
                         Button(showManual ? "수동 입력 숨기기" : "수동 입력 (옵션)") {
                             showManual.toggle()
                         }
@@ -118,6 +122,28 @@ struct SettingsView: View {
         .onAppear {
             autoFX = env.fxService.autoFetchEnabled
             ecosKey = FXKeychain.loadECOSKey() ?? ""
+        }
+        .fileImporter(
+            isPresented: $isFXCSVImporter,
+            allowedContentTypes: [.commaSeparatedText, .plainText],
+            allowsMultipleSelection: false
+        ) { result in
+            importFXCSV(result)
+        }
+    }
+
+    private func importFXCSV(_ result: Result<[URL], Error>) {
+        guard let project = env.currentProject else { return }
+        do {
+            let urls = try result.get()
+            guard let url = urls.first else { return }
+            let access = url.startAccessingSecurityScopedResource()
+            defer { if access { url.stopAccessingSecurityScopedResource() } }
+            let text = try String(contentsOf: url, encoding: .utf8)
+            let n = try env.fxService.importRatesCSV(text: text, project: project)
+            message = "환율 CSV \(n)일 import"
+        } catch {
+            message = error.localizedDescription
         }
     }
 

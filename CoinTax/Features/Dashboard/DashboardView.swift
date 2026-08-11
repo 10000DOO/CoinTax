@@ -1,19 +1,45 @@
 import SwiftUI
+import SwiftData
 
 struct DashboardView: View {
     @EnvironmentObject private var env: AppEnvironment
     @State private var message = ""
+    @State private var projects: [ProjectEntity] = []
+    @State private var newName = ""
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 Text("대시보드")
                     .font(.largeTitle.bold())
+
+                GroupBox("프로젝트") {
+                    ForEach(projects, id: \.id) { p in
+                        HStack {
+                            Button(p.name) {
+                                env.currentProject = p
+                                message = "열림: \(p.name)"
+                            }
+                            .buttonStyle(.borderless)
+                            .fontWeight(env.currentProject?.id == p.id ? .bold : .regular)
+                            Spacer()
+                            Text("이벤트 \(p.events.count)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    HStack {
+                        TextField("새 프로젝트 이름", text: $newName)
+                        Button("만들기") { createProject() }
+                            .disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+
                 if let p = env.currentProject {
-                    GroupBox("프로젝트") {
+                    GroupBox("현재 프로젝트") {
                         LabeledContent("이름", value: p.name)
                         LabeledContent("기본 과세연도", value: "\(p.defaultTaxYear)")
-                        LabeledContent("계정", value: "\(p.accounts.count)개")
+                        LabeledContent("계정", value: "\(p.accounts.count)개 (다중 거래소)")
                         LabeledContent("이벤트", value: "\(p.events.count)건")
                         LabeledContent("전송 링크(확정)", value: "\(p.links.filter { $0.status == LinkStatus.confirmed.rawValue }.count)건")
                         LabeledContent("원본 파일", value: "\(p.sourceFiles.count)개")
@@ -27,7 +53,7 @@ struct DashboardView: View {
                         GroupBox("환율 누락") {
                             Text(missingFX.joined(separator: ", "))
                                 .foregroundStyle(.orange)
-                            Text("설정 화면에서 수동 입력 후 리포트에서 재계산하세요.")
+                            Text("자동 조회가 켜져 있으면 계산 시 채웁니다. 설정에서 수동/CSV도 가능합니다.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                         }
@@ -61,6 +87,28 @@ struct DashboardView: View {
             }
             .padding()
             .frame(maxWidth: .infinity, alignment: .topLeading)
+        }
+        .onAppear { reloadProjects() }
+    }
+
+    private func reloadProjects() {
+        projects = (try? env.projectService.fetchProjects()) ?? []
+        if env.currentProject == nil {
+            env.currentProject = projects.first
+        }
+    }
+
+    private func createProject() {
+        let name = newName.trimmingCharacters(in: .whitespaces)
+        guard !name.isEmpty else { return }
+        do {
+            let p = try env.projectService.createProject(name: name)
+            env.currentProject = p
+            newName = ""
+            reloadProjects()
+            message = "생성됨: \(name)"
+        } catch {
+            message = error.localizedDescription
         }
     }
 
