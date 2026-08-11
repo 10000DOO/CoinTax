@@ -4,6 +4,7 @@ struct LedgerView: View {
     @EnvironmentObject private var env: AppEnvironment
     @State private var filterType: String = "전체"
     @State private var filterAccountID: UUID?
+    @State private var filterExchange: String = "전체"
     @State private var filterAsset: String = "전체"
     @State private var fromDate = Calendar.current.date(byAdding: .year, value: -3, to: Date()) ?? Date()
     @State private var toDate = Date()
@@ -21,13 +22,19 @@ struct LedgerView: View {
                             Text(a.displayName).tag(Optional(a.id))
                         }
                     }
-                    .frame(maxWidth: 200)
+                    .frame(maxWidth: 180)
+
+                    Picker("거래소", selection: $filterExchange) {
+                        Text("전체").tag("전체")
+                        ForEach(exchanges(in: project), id: \.self) { Text($0).tag($0) }
+                    }
+                    .frame(maxWidth: 140)
 
                     Picker("자산", selection: $filterAsset) {
                         Text("전체").tag("전체")
                         ForEach(assets(in: project), id: \.self) { Text($0).tag($0) }
                     }
-                    .frame(maxWidth: 140)
+                    .frame(maxWidth: 120)
 
                     DatePicker("부터", selection: $fromDate, displayedComponents: .date)
                     DatePicker("까지", selection: $toDate, displayedComponents: .date)
@@ -52,6 +59,8 @@ struct LedgerView: View {
                             .frame(width: 140, alignment: .leading)
                         Text(accountName(e.accountID, project: project))
                             .frame(width: 70, alignment: .leading)
+                        Text(exchangeCode(e.accountID, project: project))
+                            .frame(width: 70, alignment: .leading)
                         Text(e.type).frame(width: 100, alignment: .leading)
                         Text(e.baseAsset).frame(width: 60, alignment: .leading)
                         Text(e.quantity).frame(width: 100, alignment: .trailing)
@@ -70,8 +79,16 @@ struct LedgerView: View {
         Array(Set(project.events.map(\.baseAsset))).sorted()
     }
 
+    private func exchanges(in project: ProjectEntity) -> [String] {
+        Array(Set(project.accounts.map(\.exchangeCode))).sorted()
+    }
+
     private func accountName(_ id: UUID, project: ProjectEntity) -> String {
         project.accounts.first { $0.id == id }?.displayName ?? String(id.uuidString.prefix(6))
+    }
+
+    private func exchangeCode(_ id: UUID, project: ProjectEntity) -> String {
+        project.accounts.first { $0.id == id }?.exchangeCode ?? "-"
     }
 
     private func filteredEvents(_ project: ProjectEntity) -> [LedgerEventEntity] {
@@ -80,6 +97,10 @@ struct LedgerView: View {
         return project.events
             .filter { e in
                 if let aid = filterAccountID, e.accountID != aid { return false }
+                if filterExchange != "전체" {
+                    let ex = project.accounts.first { $0.id == e.accountID }?.exchangeCode
+                    if ex != filterExchange { return false }
+                }
                 if filterType != "전체", e.type != filterType { return false }
                 if filterAsset != "전체", e.baseAsset != filterAsset { return false }
                 if e.timestamp < start || e.timestamp >= end { return false }
