@@ -3,27 +3,55 @@ import SwiftUI
 struct LedgerView: View {
     @EnvironmentObject private var env: AppEnvironment
     @State private var filterType: String = "전체"
+    @State private var filterAccountID: UUID?
+    @State private var filterAsset: String = "전체"
+    @State private var fromDate = Calendar.current.date(byAdding: .year, value: -3, to: Date()) ?? Date()
+    @State private var toDate = Date()
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("거래내역")
                 .font(.largeTitle.bold())
-            Picker("유형", selection: $filterType) {
-                Text("전체").tag("전체")
-                ForEach(["buy","sell","deposit","withdrawal","income","transferInternal"], id: \.self) {
-                    Text($0).tag($0)
-                }
-            }
-            .pickerStyle(.segmented)
-            .frame(maxWidth: 520)
 
             if let project = env.currentProject {
-                let events = project.events.sorted { $0.timestamp > $1.timestamp }
-                let filtered = filterType == "전체" ? events : events.filter { $0.type == filterType }
+                HStack {
+                    Picker("계정", selection: $filterAccountID) {
+                        Text("전체 계정").tag(Optional<UUID>.none)
+                        ForEach(project.accounts, id: \.id) { a in
+                            Text(a.displayName).tag(Optional(a.id))
+                        }
+                    }
+                    .frame(maxWidth: 200)
+
+                    Picker("자산", selection: $filterAsset) {
+                        Text("전체").tag("전체")
+                        ForEach(assets(in: project), id: \.self) { Text($0).tag($0) }
+                    }
+                    .frame(maxWidth: 140)
+
+                    DatePicker("부터", selection: $fromDate, displayedComponents: .date)
+                    DatePicker("까지", selection: $toDate, displayedComponents: .date)
+                }
+
+                Picker("유형", selection: $filterType) {
+                    Text("전체").tag("전체")
+                    ForEach(["buy", "sell", "deposit", "withdrawal", "income", "transferInternal", "fiatDeposit", "fiatWithdraw"], id: \.self) {
+                        Text($0).tag($0)
+                    }
+                }
+                .pickerStyle(.segmented)
+
+                let filtered = filteredEvents(project)
+                Text("\(filtered.count)건")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+
                 List(filtered, id: \.id) { e in
                     HStack {
                         Text(e.timestamp.formatted(date: .abbreviated, time: .shortened))
                             .frame(width: 140, alignment: .leading)
+                        Text(accountName(e.accountID, project: project))
+                            .frame(width: 70, alignment: .leading)
                         Text(e.type).frame(width: 100, alignment: .leading)
                         Text(e.baseAsset).frame(width: 60, alignment: .leading)
                         Text(e.quantity).frame(width: 100, alignment: .trailing)
@@ -36,6 +64,28 @@ struct LedgerView: View {
             Spacer()
         }
         .padding()
+    }
+
+    private func assets(in project: ProjectEntity) -> [String] {
+        Array(Set(project.events.map(\.baseAsset))).sorted()
+    }
+
+    private func accountName(_ id: UUID, project: ProjectEntity) -> String {
+        project.accounts.first { $0.id == id }?.displayName ?? String(id.uuidString.prefix(6))
+    }
+
+    private func filteredEvents(_ project: ProjectEntity) -> [LedgerEventEntity] {
+        let start = Calendar.current.startOfDay(for: fromDate)
+        let end = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: toDate)) ?? toDate
+        return project.events
+            .filter { e in
+                if let aid = filterAccountID, e.accountID != aid { return false }
+                if filterType != "전체", e.type != filterType { return false }
+                if filterAsset != "전체", e.baseAsset != filterAsset { return false }
+                if e.timestamp < start || e.timestamp >= end { return false }
+                return true
+            }
+            .sorted { $0.timestamp > $1.timestamp }
     }
 }
 

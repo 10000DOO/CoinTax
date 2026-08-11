@@ -19,6 +19,20 @@ final class ImportService {
         var sourceFileID: UUID
     }
 
+    struct DetectOutcome: Sendable {
+        var probe: FormatProbeResult
+        var ranked: [(parserID: String, score: Double)]
+        var topParserID: String?
+    }
+
+    func detect(url: URL) -> DetectOutcome {
+        let probe = FormatProbe.probe(url: url)
+        let ranked: [(parserID: String, score: Double)] = registry.ranked(for: probe).map {
+            (parserID: $0.parser.parserID, score: $0.score)
+        }
+        return DetectOutcome(probe: probe, ranked: ranked, topParserID: ranked.first?.parserID)
+    }
+
     func importFile(url: URL, project: ProjectEntity, account: AccountEntity) throws -> ImportOutcome {
         let probe = FormatProbe.probe(url: url)
         guard let parser = registry.resolve(for: probe) else {
