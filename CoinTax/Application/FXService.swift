@@ -5,6 +5,9 @@ import SwiftData
 final class FXService {
     private let modelContext: ModelContext
     private var cache: [String: Decimal] = [:]
+    /// 기본 false — 오프라인. 설정에서 옵트인.
+    var remoteOptIn: Bool = false
+    var remoteClient: any FXClient = RemoteFXClientStub()
 
     init(modelContext: ModelContext) {
         self.modelContext = modelContext
@@ -51,5 +54,16 @@ final class FXService {
             }
         }
         return days.sorted()
+    }
+
+    /// 옵트인 원격 조회 후 로컬 캐시에 저장. 스텁은 빈 결과 → 수동 입력 유지.
+    @discardableResult
+    func fillMissingFromRemote(days: [String], project: ProjectEntity) async throws -> [String: Decimal] {
+        guard remoteOptIn else { return [:] }
+        let fetched = try await remoteClient.fetchUSD_KRW(days: days)
+        for (day, rate) in fetched {
+            try setRate(day: day, rate: rate, project: project, source: "remote")
+        }
+        return fetched
     }
 }

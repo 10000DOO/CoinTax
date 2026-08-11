@@ -8,6 +8,7 @@ struct SettingsView: View {
     @State private var marketAsset = "USDT"
     @State private var marketPrice = "1400"
     @State private var message = ""
+    @State private var remoteFX = false
 
     var body: some View {
         ScrollView {
@@ -22,16 +23,17 @@ struct SettingsView: View {
                     LabeledContent("PolicyBundle", value: env.policies.id)
                 }
 
-                GroupBox("USD/KRW 환율 (수동)") {
+                GroupBox("USD/KRW 환율") {
+                    Toggle("원격 환율 조회 옵트인 (기본 오프라인, v1 스텁)", isOn: $remoteFX)
+                        .onChange(of: remoteFX) { _, on in
+                            env.fxService.remoteOptIn = on
+                        }
                     HStack {
                         TextField("날짜 yyyy-MM-dd", text: $fxDay)
                         TextField("환율", text: $fxRate)
-                        Button("저장") { saveFX() }
+                        Button("수동 저장") { saveFX() }
                     }
                     if let project = env.currentProject {
-                        ForEach(project.fxRates, id: \.day) { r in
-                            Text("\(r.day) \(r.pair) = \(r.rate) (\(r.source))")
-                        }
                         let missing = env.fxService.missingDays(
                             for: env.projectService.domainEvents(for: project),
                             project: project
@@ -39,8 +41,18 @@ struct SettingsView: View {
                         if !missing.isEmpty {
                             Text("누락일: \(missing.joined(separator: ", "))")
                                 .foregroundStyle(.orange)
+                            Button("누락일 원격 채우기 (스텁)") {
+                                Task { await fillRemote(days: missing, project: project) }
+                            }
+                            .disabled(!remoteFX)
+                        }
+                        ForEach(project.fxRates.sorted(by: { $0.day < $1.day }), id: \.day) { r in
+                            Text("\(r.day) \(r.pair) = \(r.rate) (\(r.source))")
                         }
                     }
+                    Text("거래 원본은 기기에만 저장됩니다. 원격 조회 시에도 날짜·통화쌍만 요청하는 설계입니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
                 }
 
                 GroupBox("의제 시가 (2026-12-31)") {
@@ -88,5 +100,18 @@ struct SettingsView: View {
         }
         try? env.modelContext.save()
         message = "시가 저장됨"
+    }
+
+    private func fillRemote(days: [String], project: ProjectEntity) async {
+        do {
+            let fetched = try await env.fxService.fillMissingFromRemote(days: days, project: project)
+            if fetched.isEmpty {
+                message = "원격 스텁: 데이터 없음 — 수동 입력하세요"
+            } else {
+                message = "원격 \(fetched.count)일 저장"
+            }
+        } catch {
+            message = error.localizedDescription
+        }
     }
 }
