@@ -1,0 +1,106 @@
+# Xcode
+build/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+xcuserdata/
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (예비)
+Pods/
+Carthage/Build/
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# IDE / AI
+.idea/
+*.swp
+*~
+.claude/
+.cursor/
+.grok/
+
+# =============================================================================
+# 보안·개인정보·실거래 데이터 (절대 커밋 금지)
+# =============================================================================
+
+# 채팅/도구 첨부 (실명·계좌·거래내역 PDF 등)
+.dab-attachments/
+.attachments/
+attachments/
+
+# 사용자 실 export / import 작업 디렉터리
+docs/samples/raw/
+Import/
+UserData/
+Secrets/
+Private/
+LocalData/
+**/raw-exports/
+**/user-imports/
+
+# 거래소·세무 원본 (형식 불문)
+*.csv
+*.tsv
+*.xlsx
+*.xls
+*.xlsm
+*.pdf
+*.PDF
+# 암호 해제본 등
+*_unlocked.*
+*unlocked*.pdf
+
+# 키·인증·환경
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+.env
+.env.*
+!.env.example
+secrets.*
+credentials.*
+**/Secrets/**
+**/credentials/**
+
+# 스캔·스크린샷·덤프 (민감 경로만 — 앱 Assets 아이콘은 허용)
+docs/samples/raw/**/*.{png,jpg,jpeg,heic,webp}
+.dab-attachments/**/*
+Import/**/*
+UserData/**/*
+
+# 로컬 프로젝트 DB / 계산 스냅샷
+*.sqlite
+*.sqlite3
+*.store
+**/Application Support/CoinTax/
+
+# 테스트 산출물
+*.xcresult
+coverage/
+
+# -----------------------------------------------------------------------------
+# 예외: 합성 fixture 만 허용 (개인정보·실거래 없어야 함)
+!docs/samples/synthetic/
+!docs/samples/synthetic/**
+!docs/samples/synthetic/**/*.csv
+!docs/samples/synthetic/**/*.txt
+# -----------------------------------------------------------------------------
