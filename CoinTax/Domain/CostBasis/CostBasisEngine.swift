@@ -325,6 +325,7 @@ enum CoinTaxError: Error, LocalizedError {
     case parserReject(String)
     case formatUnknown
     case parseRow(String)
+    case pdfPassword
 
     var errorDescription: String? {
         switch self {
@@ -335,6 +336,7 @@ enum CoinTaxError: Error, LocalizedError {
         case .parserReject(let m): return m
         case .formatUnknown: return "지원 형식이 아닙니다"
         case .parseRow(let m): return m
+        case .pdfPassword: return "PDF 비밀번호를 확인하세요"
         }
     }
 
@@ -347,6 +349,7 @@ enum CoinTaxError: Error, LocalizedError {
         case .parserReject: return "E_PARSER_REJECT"
         case .formatUnknown: return "E_FORMAT_UNKNOWN"
         case .parseRow: return "E_PARSE_ROW"
+        case .pdfPassword: return "E_PDF_PASSWORD"
         }
     }
 }

@@ -3,6 +3,8 @@ import PDFKit
 
 struct BithumbCertificatePDFParser: ExchangeDocumentParser {
     let parserID = "bithumb-certificate-pdf-v1"
+    /// 암호 PDF 잠금 해제용 (UI에서 전달)
+    var password: String?
 
     func detect(_ probe: FormatProbeResult) -> Double {
         let n = probe.fileName.lowercased()
@@ -22,6 +24,12 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
         }
         guard let doc = PDFDocument(url: url) else {
             throw CoinTaxError.parserReject("PDF를 열 수 없습니다")
+        }
+        if doc.isLocked {
+            let pw = password ?? ""
+            guard !pw.isEmpty, doc.unlock(withPassword: pw) else {
+                throw CoinTaxError.pdfPassword
+            }
         }
         var text = ""
         for i in 0..<doc.pageCount {

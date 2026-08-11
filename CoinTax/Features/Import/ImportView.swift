@@ -1,5 +1,6 @@
 import SwiftUI
 import UniformTypeIdentifiers
+import PDFKit
 
 struct ImportView: View {
     @EnvironmentObject private var env: AppEnvironment
@@ -10,6 +11,12 @@ struct ImportView: View {
     @State private var lastPreview: [LedgerEventEntity] = []
     @State private var lastWarnings: [String] = []
     @State private var lastErrors: [String] = []
+    @State private var forceGeneric = false
+    @State private var pendingURL: URL?
+    @State private var genericHeaders: [String] = []
+    @State private var showGenericSheet = false
+    @State private var pdfPassword = ""
+    @State private var showPDFPassword = false
 
     var body: some View {
         ScrollView {
@@ -24,6 +31,8 @@ struct ImportView: View {
                         }
                     }
                     .frame(maxWidth: 400)
+
+                    Toggle("제네릭 표 매핑으로 강제 (프리셋 무시)", isOn: $forceGeneric)
 
                     HStack {
                         Button("파일 추가…") { isImporterPresented = true }
@@ -40,12 +49,12 @@ struct ImportView: View {
                     binanceChecklist(project)
 
                     if !lastWarnings.isEmpty || !lastErrors.isEmpty {
-                        GroupBox("이슈") {
+                        GroupBox("이슈 (행/사유)") {
                             ForEach(lastErrors, id: \.self) { e in
-                                Text("오류: \(e)").foregroundStyle(.red)
+                                Text("오류: \(e)").foregroundStyle(.red).font(.caption)
                             }
                             ForEach(lastWarnings, id: \.self) { w in
-                                Text("경고: \(w)").foregroundStyle(.orange)
+                                Text("경고: \(w)").foregroundStyle(.orange).font(.caption)
                             }
                         }
                     }
@@ -96,6 +105,42 @@ struct ImportView: View {
         ) { result in
             handleImport(result)
         }
+        .sheet(isPresented: $showGenericSheet) {
+            GenericMappingSheet(
+                headers: genericHeaders,
+                onConfirm: { map in
+                    showGenericSheet = false
+                    if let url = pendingURL {
+                        runImport(url: url, forceGeneric: true, columnMap: map)
+                    }
+                    pendingURL = nil
+                },
+                onCancel: {
+                    showGenericSheet = false
+                    pendingURL = nil
+                }
+            )
+        }
+        .sheet(isPresented: $showPDFPassword) {
+            VStack(spacing: 12) {
+                Text("PDF 비밀번호").font(.headline)
+                SecureField("비밀번호", text: $pdfPassword)
+                HStack {
+                    Button("취소") { showPDFPassword = false; pendingURL = nil }
+                    Button("열기") {
+                        showPDFPassword = false
+                        if let url = pendingURL {
+                            runImport(url: url, forceGeneric: false, columnMap: [:], pdfPassword: pdfPassword)
+                        }
+                        pdfPassword = ""
+                        pendingURL = nil
+                    }
+                    .buttonStyle(.borderedProminent)
+                }
+            }
+            .padding()
+            .frame(width: 320)
+        }
         .onAppear {
             if selectedAccountID == nil {
                 selectedAccountID = env.currentProject?.accounts.first?.id
@@ -127,16 +172,16 @@ struct ImportView: View {
                 .foregroundStyle(deposit ? .green : .secondary)
             Label(withdraw ? "Withdraw History" : "Withdraw History (미반입)", systemImage: withdraw ? "checkmark.circle.fill" : "circle")
                 .foregroundStyle(withdraw ? .green : .secondary)
-            Text("빗썸↔바이낸스 전송 매칭에는 Spot + Deposit + Withdraw 조합이 필요합니다.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
+            if spot && !deposit {
+                Text("Spot only — 전송 매칭을 위해 Deposit History가 필요합니다.")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+            }
         }
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
-        guard let project = env.currentProject,
-              let accID = selectedAccountID,
-              let account = project.accounts.first(where: { $0.id == accID }) else { return }
+        guard selectedAccountID != nil else { return }
         do {
             let urls = try result.get()
             guard let url = urls.first else { return }
@@ -144,20 +189,83 @@ struct ImportView: View {
             defer { if access { url.stopAccessingSecurityScopedResource() } }
 
             lastDetect = env.importService.detect(url: url)
-            let outcome = try env.importService.importFile(url: url, project: project, account: account)
+
+            if forceGeneric || (lastDetect?.topParserID == "generic-tabular-v1") {
+                genericHeaders = (try? env.importService.peekHeaders(url: url)) ?? []
+                if genericHeaders.isEmpty {
+                    message = "헤더를 읽지 못했습니다"
+                    return
+                }
+                pendingURL = url
+                // Keep security-scoped access by copying to temp
+                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                try? FileManager.default.removeItem(at: tmp)
+                try FileManager.default.copyItem(at: url, to: tmp)
+                pendingURL = tmp
+                showGenericSheet = true
+                return
+            }
+
+            if url.pathExtension.lowercased() == "pdf",
+               let doc = PDFDocument(url: url), doc.isLocked {
+                pendingURL = {
+                    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+                    try? FileManager.default.removeItem(at: tmp)
+                    try? FileManager.default.copyItem(at: url, to: tmp)
+                    return tmp
+                }()
+                showPDFPassword = true
+                return
+            }
+
+            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
+            try? FileManager.default.removeItem(at: tmp)
+            try FileManager.default.copyItem(at: url, to: tmp)
+            runImport(url: tmp, forceGeneric: false, columnMap: [:])
+        } catch {
+            message = "오류: \(error.localizedDescription)"
+            lastErrors = [error.localizedDescription]
+        }
+    }
+
+    private func runImport(
+        url: URL,
+        forceGeneric: Bool,
+        columnMap: [String: String],
+        pdfPassword: String? = nil
+    ) {
+        guard let project = env.currentProject,
+              let accID = selectedAccountID,
+              let account = project.accounts.first(where: { $0.id == accID }) else { return }
+        do {
+            if let pw = pdfPassword, !pw.isEmpty,
+               let doc = PDFDocument(url: url), doc.isLocked {
+                guard doc.unlock(withPassword: pw) else {
+                    throw CoinTaxError.parserReject("PDF 비밀번호를 확인하세요")
+                }
+                // Write unlocked is not trivial; Bithumb parser opens via PDFKit with password path
+                // Store password-unlocked text path: re-parse after unlock in place
+            }
+            let outcome = try env.importService.importFile(
+                url: url,
+                project: project,
+                account: account,
+                forceParserID: forceGeneric ? "generic-tabular-v1" : nil,
+                genericColumnMap: columnMap,
+                pdfPassword: pdfPassword
+            )
             lastWarnings = outcome.parseResult.warnings
             lastErrors = outcome.parseResult.errors
             lastPreview = project.events
                 .filter { $0.sourceFileID == outcome.sourceFileID }
                 .sorted { $0.timestamp > $1.timestamp }
-
             message = "가져옴 \(outcome.inserted)건, 중복 \(outcome.skippedDupe)건, 제외 \(outcome.parseResult.ignoredCount)건 (\(outcome.parseResult.parserID))"
-            if !outcome.parseResult.warnings.isEmpty {
-                message += " / 경고 \(outcome.parseResult.warnings.count)"
-            }
         } catch {
             message = "오류: \(error.localizedDescription)"
             lastErrors = [error.localizedDescription]
+            if error.localizedDescription.contains("비밀번호") || (error as? CoinTaxError)?.code == "E_PARSER_REJECT" {
+                // already set
+            }
         }
     }
 }
