@@ -120,7 +120,7 @@ SwiftUI Features
 | **3** | 빗썸 PDF 파서 | 합성 텍스트/미니 PDF fixture green |
 | **4** | Transfer matching UI+엔진 | 1건 suggest→confirm |
 | **5** | CostBasis MA+FIFO+TransferCost abandon | 단위+G1 일부 |
-| **6** | FX 캐시+수동 입력 (원격은 스텁 가능) | 누락일 UI |
+| **6** | FX 자동 조회 기본 + 수동/CSV 옵션 + 휴일 직전 고시 | 누락일 UI·sourceDate |
 | **7** | Deemed + Holdings | max 로직 테스트 |
 | **8** | TaxAggregator + Integrity **fail-closed** | V-* 테스트, export 게이트 |
 | **9** | Report UI + CSV export + 고지 | MVP §10 체크리스트 |

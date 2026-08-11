@@ -12,9 +12,10 @@ KRW 환산이 필요한 이벤트에 **거래일(KST 일자) 기준환율**을 �
 우선순위:
 
 1. 이벤트에 KRW 금액 있음 → FX 불필요  
-2. 로컬 캐시 / 수동 입력  
-3. 옵트인 원격 조회  
-4. 그래도 없음 → missing dates → 계산 preflight 실패  
+2. 로컬 캐시 (당일 고시)  
+3. **자동 원격 조회(기본 ON)** — ECOS 키 있으면 기준환율 계열, 없으면 공개 시세 폴백  
+4. 당일 미고시 → **직전 고시일** (`FXHolidayPolicy`)  
+5. 그래도 없음 → missing dates → 수동/CSV → 계산 preflight 실패  
 
 ---
 
@@ -30,7 +31,7 @@ protocol FXService {
     func missingDays(required: Set<DayKey>, pair: CurrencyPair) -> [DayKey]
     func putManual(day: DayKey, pair: CurrencyPair, rate: Decimal)
     func importCSV(_ url: URL) throws
-    func fetchRemote(days: [DayKey], pair: CurrencyPair) async throws  // 옵트인
+    func fetchRemote(days: [DayKey], pair: CurrencyPair) async throws  // 기본 자동
 }
 ```
 
