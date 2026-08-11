@@ -27,7 +27,7 @@ final class VerifierTests: XCTestCase {
         let replay = ReplayResult(
             disposals: [], holdings: HoldingsBuilder.empty(), deemedPositions: [],
             abandonedTotal: 0, extraDeductible: 0, warnings: [], transferCostDetails: [],
-            missingMarketAssets: [], missingFXDays: []
+            missingMarketAssets: [], missingFXDays: [], fxResolutions: []
         )
         let report = Verifier.verify(VerifierInput(
             summary: summary, replay: replay, policies: policies, events: [], summaryRerun: summary
@@ -55,7 +55,7 @@ final class VerifierTests: XCTestCase {
         let replay = ReplayResult(
             disposals: [], holdings: HoldingsBuilder.empty(), deemedPositions: [],
             abandonedTotal: 100, extraDeductible: 10, warnings: [], transferCostDetails: [detail],
-            missingMarketAssets: [], missingFXDays: []
+            missingMarketAssets: [], missingFXDays: [], fxResolutions: []
         )
         let report = Verifier.verify(VerifierInput(
             summary: summary, replay: replay, policies: policies, events: [], summaryRerun: summary

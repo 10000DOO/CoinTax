@@ -34,6 +34,9 @@ struct SettingsView: View {
                     Text("계산 시 누락된 거래일 환율을 자동으로 가져옵니다. 한국은행 ECOS 키가 있으면 기준환율 계열을 우선하고, 없으면 공개 시세 폴백을 씁니다.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
+                    Text("휴일·주말 등 미고시일: 국세청 서삼46015-11986 취지에 따라 직전 고시일 기준환율을 적용하고 적용 고시일(sourceDate)을 기록합니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
 
                     VStack(alignment: .leading, spacing: 6) {
                         Text("한국은행 ECOS API 키 (선택 · Keychain 저장)")

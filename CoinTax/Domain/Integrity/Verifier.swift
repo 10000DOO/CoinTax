@@ -93,6 +93,18 @@ enum Verifier {
             issues.append(.init(id: "V-FX-01", severity: "critical", message: "needsFX 이벤트 잔존", context: nil))
         }
 
+        // V-FX-03 휴일 대체 시 sourceDate 기록
+        for fx in r.fxResolutions where fx.usedPreviousPublished {
+            if fx.sourceDate.isEmpty || fx.sourceDate == fx.eventDay {
+                issues.append(.init(
+                    id: "V-FX-03",
+                    severity: "warning",
+                    message: "휴일·미고시 환율 대체 시 적용 고시일(sourceDate)이 없습니다",
+                    context: fx.eventDay
+                ))
+            }
+        }
+
         // missing market with positive qty positions that should have been deemed
         if !r.missingMarketAssets.isEmpty {
             issues.append(.init(id: "V-DEM-02", severity: "critical", message: "의제 시가 누락", context: r.missingMarketAssets.map(\.code).joined(separator: ",")))

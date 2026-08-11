@@ -33,19 +33,38 @@ final class FXService {
         return cache
     }
 
-    func setRate(day: String, rate: Decimal, project: ProjectEntity, source: String = "manual") throws {
+    func setRate(
+        day: String,
+        rate: Decimal,
+        project: ProjectEntity,
+        source: String = "manual",
+        sourceDate: String? = nil
+    ) throws {
         // 수동 입력이 있으면 이후 자동이 덮어쓰지 않도록 기존 manual 유지 옵션은 fill 쪽에서 처리
+        let resolvedSourceDate = sourceDate ?? day
         if let existing = project.fxRates.first(where: { $0.day == day && $0.pair == "USD/KRW" }) {
             existing.rate = Money.decimalString(rate)
             existing.source = source
+            existing.sourceDate = resolvedSourceDate
         } else {
-            let e = FXRateEntity(day: day, rate: Money.decimalString(rate), source: source)
+            let e = FXRateEntity(
+                day: day,
+                rate: Money.decimalString(rate),
+                source: source,
+                sourceDate: resolvedSourceDate
+            )
             e.project = project
             project.fxRates.append(e)
             modelContext.insert(e)
         }
         cache[day] = rate
         try modelContext.save()
+    }
+
+    /// 이벤트일에 고시가 없을 때 직전 고시율을 해석 (저장 없이 조회).
+    func resolveRate(eventDay: String, project: ProjectEntity) -> FXResolvedRate? {
+        let published = ratesMap(for: project)
+        return FXHolidayPolicy.resolve(eventDay: eventDay, published: published)
     }
 
     func missingDays(for events: [LedgerEvent], project: ProjectEntity) -> [String] {
@@ -91,14 +110,49 @@ final class FXService {
         return fetched
     }
 
-    /// 계산 직전: 누락일 자동 채움.
+    /// 계산 직전: 누락일 자동 채움 + 휴일 미고시는 직전 고시로 해석 가능하면 합성 저장.
     @discardableResult
     func ensureRatesForCalculation(events: [LedgerEvent], project: ProjectEntity) async throws -> [String] {
-        let missing = missingDays(for: events, project: project)
-        guard !missing.isEmpty else { return [] }
-        if autoFetchEnabled {
-            _ = try await fillMissingFromRemote(days: missing, project: project)
+        var missing = missingDays(for: events, project: project)
+        if !missing.isEmpty, autoFetchEnabled {
+            // 원격 조회 시 시작 전 버퍼를 위해 인접 영업일도 요청
+            let expanded = expandLookback(days: missing, back: FXHolidayPolicy.maxLookbackDays)
+            _ = try await fillMissingFromRemote(days: expanded, project: project)
+            missing = missingDays(for: events, project: project)
+        }
+        // 여전히 당일 키가 없어도 직전 고시가 있으면 previousBusinessDay 로 기록
+        let published = ratesMap(for: project)
+        for day in missing {
+            if let resolved = FXHolidayPolicy.resolve(eventDay: day, published: published),
+               resolved.usedPreviousPublished {
+                try setRate(
+                    day: day,
+                    rate: resolved.rate,
+                    project: project,
+                    source: "previousBusinessDay",
+                    sourceDate: resolved.sourceDate
+                )
+            }
         }
         return missingDays(for: events, project: project)
+    }
+
+    private func expandLookback(days: [String], back: Int) -> [String] {
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = TaxTime.seoul
+        let f = DateFormatter()
+        f.calendar = cal
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TaxTime.seoul
+        f.dateFormat = "yyyy-MM-dd"
+        var set = Set(days)
+        for day in days {
+            guard var d = f.date(from: day) else { continue }
+            for _ in 0..<back {
+                d = cal.date(byAdding: .day, value: -1, to: d) ?? d
+                set.insert(f.string(from: d))
+            }
+        }
+        return set.sorted()
     }
 }

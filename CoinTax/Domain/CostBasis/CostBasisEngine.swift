@@ -3,7 +3,8 @@ import Foundation
 struct CostBasisEngine {
     var policies: PolicyBundle
     var accountsByID: [AccountID: Account]
-    var fxRates: [String: Decimal] // day -> USD/KRW
+    /// 실제 고시·수동 입력된 일자별 USD/KRW (미고시일 키 없음)
+    var fxRates: [String: Decimal]
     var marketPrices: [String: Decimal] // asset code -> KRW unit as of deemed
 
     func replay(
@@ -19,6 +20,8 @@ struct CostBasisEngine {
         var transferDetails: [TransferCostDetail] = []
         var missingMarket: Set<String> = []
         var missingFX: Set<String> = []
+        var fxResolutions: [FXResolvedRate] = []
+        var fxResolvedByDay: [String: FXResolvedRate] = [:]
 
         let confirmed = links.filter { $0.status == .confirmed }
         let linkByFrom = Dictionary(uniqueKeysWithValues: confirmed.map { ($0.fromEventID, $0) })
@@ -62,19 +65,23 @@ struct CostBasisEngine {
             return 0
         }
 
+        /// 국세청 서삼46015-11986 취지: 미고시일(공휴일 등) → 직전 고시 기준환율
         func rateFor(_ date: Date) -> Decimal? {
             let day = TaxTime.dayKST(date)
-            if let r = fxRates[day] { return r }
-            // previous business day roll: scan back up to 10 days
-            var cal = Calendar(identifier: .gregorian)
-            cal.timeZone = TaxTime.seoul
-            var d = date
-            for _ in 0..<10 {
-                d = cal.date(byAdding: .day, value: -1, to: d)!
-                let key = TaxTime.dayKST(d)
-                if let r = fxRates[key] { return r }
+            if let cached = fxResolvedByDay[day] {
+                return cached.rate
             }
-            return nil
+            guard let resolved = FXHolidayPolicy.resolve(eventDay: day, published: fxRates) else {
+                return nil
+            }
+            fxResolvedByDay[day] = resolved
+            fxResolutions.append(resolved)
+            if resolved.usedPreviousPublished {
+                warnings.append(
+                    "환율 미고시일 \(resolved.eventDay) → 직전 고시일 \(resolved.sourceDate) 기준환율 적용 (FXHolidayPolicy/\(FXHolidayPolicy.id))"
+                )
+            }
+            return resolved.rate
         }
 
         func costKRWForBuy(_ e: LedgerEvent) throws -> Decimal {
@@ -304,7 +311,8 @@ struct CostBasisEngine {
             warnings: warnings,
             transferCostDetails: transferDetails,
             missingMarketAssets: missingMarket.map { AssetSymbol($0) },
-            missingFXDays: Array(missingFX).sorted()
+            missingFXDays: Array(missingFX).sorted(),
+            fxResolutions: fxResolutions
         )
     }
 }

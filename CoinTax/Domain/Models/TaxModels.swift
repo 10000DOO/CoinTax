@@ -89,6 +89,8 @@ struct ReplayResult: Sendable {
     var transferCostDetails: [TransferCostDetail]
     var missingMarketAssets: [AssetSymbol]
     var missingFXDays: [String]
+    /// 휴일·미고시 대체 적용 기록 (V-FX-03)
+    var fxResolutions: [FXResolvedRate]
 }
 
 struct TransferCostDetail: Sendable {
