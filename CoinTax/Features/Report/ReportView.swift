@@ -1,4 +1,6 @@
 import SwiftUI
+import UniformTypeIdentifiers
+import AppKit
 
 struct ReportView: View {
     @EnvironmentObject private var env: AppEnvironment
@@ -15,6 +17,8 @@ struct ReportView: View {
                     Stepper("과세연도 \(taxYear)", value: $taxYear, in: 2027...2035)
                     Button("계산") { runCalc() }
                     Button("CSV 내보내기") { exportCSV() }
+                        .disabled(!(env.lastCalculation?.verification.isExportAllowed ?? false))
+                    Button("PDF 내보내기") { exportPDF() }
                         .disabled(!(env.lastCalculation?.verification.isExportAllowed ?? false))
                 }
                 if let c = env.lastCalculation {
@@ -35,6 +39,21 @@ struct ReportView: View {
                         LabeledContent("지방세(2%)", value: Money.decimalString(s.localTaxKRW) + " 원")
                         LabeledContent("예상 세액 합계", value: Money.decimalString(s.totalTaxKRW) + " 원")
                         LabeledContent("전송 소실 원가(참고·비공제)", value: Money.decimalString(s.abandonedTransferCostKRW) + " 원")
+                    }
+
+                    GroupBox("자산별 실현손익 집계") {
+                        let byAsset = Dictionary(grouping: s.disposals, by: { $0.asset.code })
+                        if byAsset.isEmpty {
+                            Text("해당 없음").foregroundStyle(.secondary)
+                        } else {
+                            ForEach(byAsset.keys.sorted(), id: \.self) { code in
+                                let rows = byAsset[code] ?? []
+                                let pnl = rows.reduce(Decimal(0)) { $0 + $1.pnlKRW }
+                                let proceeds = rows.reduce(Decimal(0)) { $0 + $1.proceedsKRW }
+                                Text("\(code): \(rows.count)건  양도 \(Money.decimalString(proceeds))  PnL \(Money.decimalString(pnl))")
+                                    .font(.caption.monospaced())
+                            }
+                        }
                     }
 
                     GroupBox("실현손익 건별 (\(s.disposals.count))") {
@@ -119,6 +138,29 @@ struct ReportView: View {
         do {
             exportText = try ReportCSVExporter.exportCSV(s)
             message = "CSV 생성 완료"
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.commaSeparatedText]
+            panel.nameFieldStringValue = "cointax-\(s.taxYear).csv"
+            if panel.runModal() == .OK, let url = panel.url {
+                try exportText?.write(to: url, atomically: true, encoding: .utf8)
+                message = "CSV 저장: \(url.lastPathComponent)"
+            }
+        } catch {
+            message = error.localizedDescription
+        }
+    }
+
+    private func exportPDF() {
+        guard let s = env.lastCalculation?.summary else { return }
+        do {
+            let data = try ReportPDFExporter.exportPDF(s)
+            let panel = NSSavePanel()
+            panel.allowedContentTypes = [.pdf]
+            panel.nameFieldStringValue = "cointax-\(s.taxYear).pdf"
+            if panel.runModal() == .OK, let url = panel.url {
+                try data.write(to: url)
+                message = "PDF 저장: \(url.lastPathComponent)"
+            }
         } catch {
             message = error.localizedDescription
         }
