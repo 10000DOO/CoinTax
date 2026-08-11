@@ -38,7 +38,10 @@ chmod +x scripts/smoke.sh
 
 ## CI
 
-`.github/workflows/ci.yml` — macOS에서 `CoinTaxTests` 실행 (synthetic only).
+워크플로 정의: [`docs/ci/github-actions.yml`](./docs/ci/github-actions.yml)  
+(GitHub에 올리려면 PAT에 `workflow` scope가 필요합니다. 적용 방법은 [`docs/ci/README.md`](./docs/ci/README.md).)
+
+로컬: `./scripts/smoke.sh`
 
 ## 면책
 
