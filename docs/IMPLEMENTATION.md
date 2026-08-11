@@ -221,10 +221,12 @@ deductibleExpense = 0
 
 [01-requirements.md](./01-requirements.md) §10 전체 + 아래:
 
-- [ ] `PolicyBundle.id == "cointax-v1.0"` 리포트 표시  
-- [ ] 고지 4종이 리포트·export에 포함  
-- [ ] G1 골든 (14-spec 수치) 테스트 통과  
-- [ ] Critical verify 시 export 버튼 disabled  
+- [x] `PolicyBundle.id == "cointax-v1.0"` 리포트 표시  
+- [x] 고지 4종이 리포트·export에 포함  
+- [x] G1 골든 (14-spec 수치) 테스트 통과  
+- [x] Critical verify 시 export 버튼 disabled  
+
+> 체크 갱신: 2026-08-11 (CoinTaxTests 30 pass).
 
 ---
 

@@ -708,12 +708,14 @@ detect 동점 시 파일명 힌트:
 
 ## 15. 완료 정의 (다른 세션 Definition of Done)
 
-1. macOS 15 빌드  
-2. 6개 파서 + 합성 fixture 테스트  
-3. G1/G1b/G2 수치 테스트  
-4. Verify fail-closed export  
-5. MVP requirements §10 전부  
-6. 실파일 없이도 CI 가능 (synthetic only)  
+1. [x] macOS 15 빌드  
+2. [x] 6개 파서 + 합성 fixture 테스트 (+ `generic-tabular-v1` 폴백)  
+3. [x] G1/G1b/G2 수치 테스트  
+4. [x] Verify fail-closed export  
+5. [x] MVP requirements §10 전부  
+6. [x] 실파일 없이도 CI 가능 (synthetic only)  
+
+> 체크 갱신: 2026-08-11.
 
 ---
 
