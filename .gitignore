@@ -45,13 +45,13 @@ Carthage/Build/
 .attachments/
 attachments/
 
-# 사용자 실 export / import 작업 디렉터리
+# 사용자 실 export / import 작업 디렉터리 (저장소 루트만 — CoinTax/Import 소스와 구분)
 docs/samples/raw/
-Import/
-UserData/
-Secrets/
-Private/
-LocalData/
+/Import/
+/UserData/
+/Secrets/
+/Private/
+/LocalData/
 **/raw-exports/
 **/user-imports/
 
