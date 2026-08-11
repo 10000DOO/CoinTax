@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+  test:
+    name: macOS unit tests (synthetic only)
+    runs-on: macos-14
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+
+      - name: Build for testing
+        run: |
+          set -euo pipefail
+          xcodebuild \
+            -scheme CoinTax \
+            -destination 'platform=macOS,arch=arm64' \
+            -derivedDataPath DerivedData \
+            build-for-testing
+
+      - name: Run CoinTaxTests
+        run: |
+          set -euo pipefail
+          # xcodebuild may hang after tests on some hosts — kill after suite completes
+          log=$(mktemp)
+          (
+            xcodebuild \
+              -scheme CoinTax \
+              -destination 'platform=macOS,arch=arm64' \
+              -derivedDataPath DerivedData \
+              test-without-building \
+              -only-testing:CoinTaxTests \
+              -parallel-testing-enabled NO \
+              >"$log" 2>&1
+          ) &
+          pid=$!
+          for i in $(seq 1 120); do
+            if grep -q "Test Suite 'All tests' passed" "$log" 2>/dev/null; then
+              sleep 2
+              kill "$pid" 2>/dev/null || true
+              wait "$pid" 2>/dev/null || true
+              tail -50 "$log"
+              exit 0
+            fi
+            if grep -q "Test Suite 'All tests' failed" "$log" 2>/dev/null; then
+              tail -80 "$log"
+              kill "$pid" 2>/dev/null || true
+              exit 1
+            fi
+            if ! kill -0 "$pid" 2>/dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          tail -80 "$log"
+          if grep -q "with 0 failures" "$log"; then
+            exit 0
+          fi
+          exit 1

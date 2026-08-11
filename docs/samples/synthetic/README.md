@@ -11,5 +11,6 @@
 | `binance_withdraw_sample.csv` | 바이낸스 Withdraw |
 | `bithumb_certificate_sample.txt` | 빗썸 확인서 파이프 텍스트 모드 |
 | `generic_tabular_sample.csv` | `generic-tabular-v1` 폴백 |
+| `fx_rates_sample.csv` | 환율 수동 CSV import |
 
 별칭 파일(`*_history_sample.csv`)은 문서 예시용. 실거래 raw는 `docs/samples/raw/` (gitignore).
