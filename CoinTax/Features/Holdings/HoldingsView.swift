@@ -71,12 +71,15 @@ struct HoldingsView: View {
 
     private func recalculate() {
         guard let project = env.currentProject else { return }
-        do {
-            let result = try env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
-            env.lastCalculation = result
-            message = "갱신 · 검증 \(result.verification.status)"
-        } catch {
-            message = error.localizedDescription
+        message = "계산 중…"
+        Task {
+            do {
+                let result = try await env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
+                env.lastCalculation = result
+                message = "갱신 · 검증 \(result.verification.status)"
+            } catch {
+                message = error.localizedDescription
+            }
         }
     }
 }

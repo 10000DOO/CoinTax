@@ -16,12 +16,17 @@ final class CalculationPipeline {
         self.modelContext = modelContext
     }
 
-    func calculate(project: ProjectEntity, taxYear: Int) throws -> CalculationResult {
+    var fxService: FXService?
+
+    func calculate(project: ProjectEntity, taxYear: Int) async throws -> CalculationResult {
         let ps = ProjectService(modelContext: modelContext)
         let accounts = ps.domainAccounts(for: project)
         let events = ps.domainEvents(for: project)
         let links = ps.domainLinks(for: project)
-        let fx = FXService(modelContext: modelContext).ratesMap(for: project)
+        let fxSvc = fxService ?? FXService(modelContext: modelContext)
+        // 자동 환율(기본): 계산 전 누락일 채움
+        _ = try await fxSvc.ensureRatesForCalculation(events: events, project: project)
+        let fx = fxSvc.ratesMap(for: project)
 
         var market: [String: Decimal] = [:]
         for m in project.marketPrices where m.asOf == "2026-12-31" {

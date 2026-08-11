@@ -102,12 +102,15 @@ struct ReportView: View {
 
     private func runCalc() {
         guard let project = env.currentProject else { return }
-        do {
-            let result = try env.pipeline.calculate(project: project, taxYear: taxYear)
-            env.lastCalculation = result
-            message = "계산 완료 — \(result.verification.status)"
-        } catch {
-            message = "계산 오류: \(error.localizedDescription)"
+        message = "계산 중… (환율 자동 조회 포함)"
+        Task {
+            do {
+                let result = try await env.pipeline.calculate(project: project, taxYear: taxYear)
+                env.lastCalculation = result
+                message = "계산 완료 — \(result.verification.status)"
+            } catch {
+                message = "계산 오류: \(error.localizedDescription)"
+            }
         }
     }
 

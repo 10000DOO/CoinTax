@@ -8,7 +8,9 @@ struct SettingsView: View {
     @State private var marketAsset = "USDT"
     @State private var marketPrice = "1400"
     @State private var message = ""
-    @State private var remoteFX = false
+    @State private var autoFX = FXPreferences.autoFetchEnabled
+    @State private var ecosKey = FXKeychain.loadECOSKey() ?? ""
+    @State private var showManual = false
 
     var body: some View {
         ScrollView {
@@ -24,15 +26,33 @@ struct SettingsView: View {
                 }
 
                 GroupBox("USD/KRW 환율") {
-                    Toggle("원격 환율 조회 옵트인 (기본 오프라인, v1 스텁)", isOn: $remoteFX)
-                        .onChange(of: remoteFX) { _, on in
-                            env.fxService.remoteOptIn = on
+                    Toggle("자동 환율 조회 (기본 켜짐)", isOn: $autoFX)
+                        .onChange(of: autoFX) { _, on in
+                            env.fxService.autoFetchEnabled = on
+                            FXPreferences.autoFetchEnabled = on
                         }
-                    HStack {
-                        TextField("날짜 yyyy-MM-dd", text: $fxDay)
-                        TextField("환율", text: $fxRate)
-                        Button("수동 저장") { saveFX() }
+                    Text("계산 시 누락된 거래일 환율을 자동으로 가져옵니다. 한국은행 ECOS 키가 있으면 기준환율 계열을 우선하고, 없으면 공개 시세 폴백을 씁니다.")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text("한국은행 ECOS API 키 (선택 · Keychain 저장)")
+                            .font(.caption.weight(.semibold))
+                        SecureField("ECOS 인증키", text: $ecosKey)
+                        HStack {
+                            Button("키 저장") {
+                                FXKeychain.saveECOSKey(ecosKey)
+                                message = ecosKey.isEmpty ? "ECOS 키 삭제됨 — 공개 시세 폴백" : "ECOS 키 저장됨"
+                            }
+                            Button("삭제", role: .destructive) {
+                                ecosKey = ""
+                                FXKeychain.clearECOSKey()
+                                message = "ECOS 키 삭제됨"
+                            }
+                            Link("키 발급", destination: URL(string: "https://ecos.bok.or.kr/api/")!)
+                        }
                     }
+
                     if let project = env.currentProject {
                         let missing = env.fxService.missingDays(
                             for: env.projectService.domainEvents(for: project),
@@ -41,16 +61,34 @@ struct SettingsView: View {
                         if !missing.isEmpty {
                             Text("누락일: \(missing.joined(separator: ", "))")
                                 .foregroundStyle(.orange)
-                            Button("누락일 원격 채우기 (스텁)") {
-                                Task { await fillRemote(days: missing, project: project) }
-                            }
-                            .disabled(!remoteFX)
                         }
+                        Button("지금 자동 채우기") {
+                            Task { await fillRemote(project: project) }
+                        }
+                        .help("누락일을 원격에서 채웁니다 (자동 설정이 꺼져 있어도 한 번 실행 가능)")
+
+                        Button(showManual ? "수동 입력 숨기기" : "수동 입력 (옵션)") {
+                            showManual.toggle()
+                        }
+                        .buttonStyle(.borderless)
+
+                        if showManual {
+                            HStack {
+                                TextField("날짜 yyyy-MM-dd", text: $fxDay)
+                                TextField("환율", text: $fxRate)
+                                Button("수동 저장") { saveFX() }
+                            }
+                            Text("수동 값은 이후 자동 조회가 덮어쓰지 않습니다.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+
                         ForEach(project.fxRates.sorted(by: { $0.day < $1.day }), id: \.day) { r in
                             Text("\(r.day) \(r.pair) = \(r.rate) (\(r.source))")
+                                .font(.caption.monospaced())
                         }
                     }
-                    Text("거래 원본은 기기에만 저장됩니다. 원격 조회 시에도 날짜·통화쌍만 요청하는 설계입니다.")
+                    Text("거래 원본은 기기에만 저장됩니다. 원격 조회는 날짜·통화쌍만 요청합니다.")
                         .font(.caption2)
                         .foregroundStyle(.secondary)
                 }
@@ -74,14 +112,18 @@ struct SettingsView: View {
             }
             .padding()
         }
+        .onAppear {
+            autoFX = env.fxService.autoFetchEnabled
+            ecosKey = FXKeychain.loadECOSKey() ?? ""
+        }
     }
 
     private func saveFX() {
         guard let project = env.currentProject,
               let rate = Money.parseDecimal(fxRate) else { return }
         do {
-            try env.fxService.setRate(day: fxDay, rate: rate, project: project)
-            message = "환율 저장됨"
+            try env.fxService.setRate(day: fxDay, rate: rate, project: project, source: "manual")
+            message = "수동 환율 저장됨 (자동이 덮어쓰지 않음)"
         } catch {
             message = error.localizedDescription
         }
@@ -102,13 +144,21 @@ struct SettingsView: View {
         message = "시가 저장됨"
     }
 
-    private func fillRemote(days: [String], project: ProjectEntity) async {
+    private func fillRemote(project: ProjectEntity) async {
+        let missing = env.fxService.missingDays(
+            for: env.projectService.domainEvents(for: project),
+            project: project
+        )
+        let days = missing.isEmpty
+            ? env.projectService.domainEvents(for: project).map { TaxTime.dayKST($0.timestamp) }
+            : missing
+        let unique = Array(Set(days)).sorted()
         do {
-            let fetched = try await env.fxService.fillMissingFromRemote(days: days, project: project)
+            let fetched = try await env.fxService.fillMissingFromRemote(days: unique, project: project, force: true)
             if fetched.isEmpty {
-                message = "원격 스텁: 데이터 없음 — 수동 입력하세요"
+                message = "원격에서 채운 날짜 없음 — ECOS 키 또는 네트워크를 확인하거나 수동 입력하세요"
             } else {
-                message = "원격 \(fetched.count)일 저장"
+                message = "자동 \(fetched.count)일 저장"
             }
         } catch {
             message = error.localizedDescription

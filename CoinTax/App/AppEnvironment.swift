@@ -16,6 +16,7 @@ final class AppEnvironment: ObservableObject {
     lazy var pipeline: CalculationPipeline = {
         let p = CalculationPipeline(modelContext: modelContext)
         p.policies = policies
+        p.fxService = fxService
         return p
     }()
 

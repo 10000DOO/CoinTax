@@ -65,12 +65,15 @@ struct DashboardView: View {
     }
 
     private func runCalc(project: ProjectEntity) {
-        do {
-            let result = try env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
-            env.lastCalculation = result
-            message = "계산 완료 — \(result.verification.status)"
-        } catch {
-            message = error.localizedDescription
+        message = "계산 중…"
+        Task {
+            do {
+                let result = try await env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
+                env.lastCalculation = result
+                message = "계산 완료 — \(result.verification.status)"
+            } catch {
+                message = error.localizedDescription
+            }
         }
     }
 }

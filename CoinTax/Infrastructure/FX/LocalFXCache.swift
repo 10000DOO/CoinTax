@@ -24,9 +24,22 @@ protocol FXClient: Sendable {
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal]
 }
 
-/// Optional remote stub — always empty (offline default).
+/// 테스트용 빈 클라이언트.
 struct RemoteFXClientStub: FXClient {
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal] {
         [:]
+    }
+}
+
+enum FXPreferences {
+    private static let autoKey = "fx.autoFetchEnabled"
+
+    /// 기본값 true — 자동 환율 조회가 기본, 수동은 옵션.
+    static var autoFetchEnabled: Bool {
+        get {
+            if UserDefaults.standard.object(forKey: autoKey) == nil { return true }
+            return UserDefaults.standard.bool(forKey: autoKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: autoKey) }
     }
 }
