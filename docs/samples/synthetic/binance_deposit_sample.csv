@@ -1,0 +1,3 @@
+Date(UTC+0),Coin,Network,Amount,Address,TXID,Status
+27-06-01 10:00:00,USDT,TRX,9.9,addr_synth_1,txid_synth_1,Completed
+27-06-01 11:00:00,USDT,TRX,1.0,addr_synth_2,txid_synth_2,Pending

@@ -1,0 +1,5 @@
+UID:synthetic,Account Type:Main,Time Zone:UTC+8
+id,Order id,Time,Trade Type,Symbol,Action,Amount,Trading Unit,Filled Price,PnL,Fee,Fee Unit,Position Change,Position Balance,Balance Change,Balance,Balance Unit
+1001,ord-1,2027-06-01 10:00:00,Spot,BTC-USDT,Buy,0.01,BTC,50000.00000000,0.00000000,0.00000000,USDT,0.00000000,0.00000000,0.01,0.01,BTC
+1002,ord-1,2027-06-01 10:00:00,Spot,BTC-USDT,Buy,500,USDT,50000.00000000,0.00000000,0.00000000,USDT,0.00000000,0.00000000,-500,0,USDT
+1003,tr-1,2027-06-02 12:00:00,Transfer,,Transfer in,0,cont,0.00000000,0.00000000,0.00000000,USDT,0.00000000,0.00000000,10,10,USDT

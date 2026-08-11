@@ -1,0 +1,8 @@
+UID:000,Account Type:Main,Time Zone:UTC+8
+id,Time,Type,Amount,Before Balance,After Balance,Symbol
+1,2025-12-28 18:26:32,Withdrawal,-1.5,1.5,0,USDT
+2,2025-12-25 13:59:10,Deposit,200,0,200,USDT
+3,2025-11-29 08:25:29,To unified trading account,-100,100,0,USDT
+4,2025-11-29 08:26:00,From unified trading account,100,0,100,USDT
+5,2025-12-01 10:00:00,Fee rebate,0.5,100,100.5,USDT
+6,2025-12-02 11:00:00,Received,10,100.5,110.5,USDT
