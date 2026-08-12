@@ -38,7 +38,9 @@ final class ImportPipelineTests: XCTestCase {
         )
         let trades = result.events.filter { $0.type == .buy || $0.type == .sell }
         XCTAssertEqual(trades.count, 1)
-        XCTAssertTrue(result.events.contains { $0.type == .deposit })
+        // Transfer 행 = 거래소 내부 이동. 외부 입출금은 Funding History 담당 (리뷰 1-3)
+        XCTAssertTrue(result.events.contains { $0.type == .transferInternal })
+        XCTAssertFalse(result.events.contains { $0.type == .deposit })
     }
 
     func testRegistryPrefersOKXFundingOverGeneric() {

@@ -31,7 +31,7 @@ final class FXHolidayPolicyTests: XCTestCase {
     }
 
     func testLongHolidayLookbackWithin14Days() {
-        var published: [String: Decimal] = ["2027-02-01": 1200]
+        let published: [String: Decimal] = ["2027-02-01": 1200]
         // 2/2~2/14 미고시, 2/15 거래
         let r = FXHolidayPolicy.resolve(eventDay: "2027-02-10", published: published)
         XCTAssertEqual(r?.sourceDate, "2027-02-01")

@@ -108,7 +108,6 @@ final class SyntheticProjectSmokeTests: XCTestCase {
     }
 
     func testGenericMappingRequiredFields() {
-        let headers = ["Date", "Type", "Asset", "Amount"]
         // smoke that parser accepts explicit map
         let parser = GenericTabularMapper(columnMap: [
             "timestamp": "Date",
