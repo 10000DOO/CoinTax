@@ -196,7 +196,24 @@ struct CostBasisEngine {
         func feeCostKRW(_ e: LedgerEvent, skipAsset: AssetSymbol? = nil) -> Decimal {
             guard let feeAmt = e.feeAmount, feeAmt != 0 else { return 0 }
             let amount = Money.abs(feeAmt)
-            let asset = e.feeAsset ?? e.baseAsset
+            // 수수료 자산 칸이 비어 있으면 **원화로 본다.**
+            //
+            // 예전에는 「기초자산으로 냈겠지」라고 넘겨짚었다. 그러면 원화 수수료 1,500원이
+            // 코인 1,500개를 처분해 보유·원가가 통째로 틀어졌다 (감사 D-1).
+            // 자산 칸이 없는 파일 형식은 원화 마켓이 압도적이고, 코인으로 낸 수수료는
+            // 거래소가 반드시 단위를 적는다. 혹시 코인이었다면 원화로 보는 쪽이
+            // 필요경비를 과소 계상해 **세금이 커지는 방향**이라 과다 공제 위험도 없다.
+            //
+            // 수량 규칙 한 벌(`LedgerDelta`)도 `feeAsset == nil` 이면 장부를 건드리지 않으므로
+            // 이제 두 곳이 같은 답을 낸다 (감사 D-2 — 정상 자료가 V-QTY-01 로 막히던 원인).
+            let asset = e.feeAsset ?? AssetSymbol("KRW")
+            if e.feeAsset == nil {
+                issues.append(.init(
+                    id: "V-FEE-01", severity: "warning",
+                    message: "수수료를 어느 자산으로 냈는지 원본에 없습니다 — 원화로 보고 필요경비에 넣었습니다. 코인으로 낸 것이면 그 코인 수량이 줄지 않았으니 원본을 확인하세요",
+                    context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(Money.decimalString(amount))"
+                ))
+            }
             if let skip = skipAsset, asset == skip { return 0 }
             if asset.isKRW { return amount }
             let b = book(for: e.accountID, asset: asset)
