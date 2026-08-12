@@ -57,8 +57,12 @@ final class MovingAverageBook: AssetBook {
             return DisposeOutcome(costKRW: 0, shortfallQty: qty)
         }
         let take = min(qty, quantity)
-        let unit = totalCost / quantity
-        let cost = unit * take
+        // 전량 처분이면 **잔여 원가를 그대로** 쓴다.
+        //
+        // 단가(총원가÷수량)를 구해 되곱하면 18자리 수량(wei 단위 ETH 등)에서 나눗셈이
+        // 무한소수가 되어 정확히 돌아오지 않는다. 전량인데 원가가 1원이라도 남으면 세금이 틀린다.
+        // 부분 처분은 곱셈을 먼저 해 오차를 줄인다 (총원가×take÷수량).
+        let cost: Decimal = take == quantity ? totalCost : totalCost * take / quantity
         quantity -= take
         totalCost -= cost
         if Money.isApproxZero(quantity) {
@@ -105,20 +109,32 @@ final class MovingAverageBook: AssetBook {
 
 final class FIFOBook: AssetBook {
     let method: CostBasisMethod = .fifo
+    /// lot 은 **단가가 아니라 남은 원가**를 들고 있는다.
+    ///
+    /// 단가로 들고 있으면 취득 때 한 번 나누고 처분 때 되곱하면서, 18자리 수량에서
+    /// 원가가 정확히 돌아오지 않는다 (전량 처분인데 잔액이 남는다).
+    /// 원가를 그대로 보관하면 전량 처분에 나눗셈이 아예 없다.
     private struct Lot {
         var qty: Decimal
-        var unitCost: Decimal
+        var cost: Decimal
+        var unitCost: Decimal { qty == 0 ? 0 : cost / qty }
     }
     private var lots: [Lot] = []
 
     var quantity: Decimal { lots.reduce(0) { $0 + $1.qty } }
-    var totalCost: Decimal { lots.reduce(0) { $0 + $1.qty * $1.unitCost } }
+    var totalCost: Decimal { lots.reduce(0) { $0 + $1.cost } }
     var openLots: [(qty: Decimal, unitCost: Decimal)] { lots.map { ($0.qty, $0.unitCost) } }
 
     func acquire(qty: Decimal, costKRW: Decimal) {
         guard qty > 0 else { return }
-        let unit = costKRW / qty
-        lots.append(Lot(qty: qty, unitCost: unit))
+        lots.append(Lot(qty: qty, cost: costKRW))
+    }
+
+    /// lot 에서 `take` 만큼 덜어낸 원가. lot 을 비우면 남은 원가를 통째로 준다 (나눗셈 없음).
+    private func takeCost(from index: Int, take: Decimal) -> Decimal {
+        let lot = lots[index]
+        if take >= lot.qty { return lot.cost }
+        return lot.cost * take / lot.qty
     }
 
     func disposeClamped(qty: Decimal) -> DisposeOutcome {
@@ -127,8 +143,10 @@ final class FIFOBook: AssetBook {
         var cost: Decimal = 0
         while remain > Money.qtyEpsilon, !lots.isEmpty {
             let take = min(lots[0].qty, remain)
-            cost += take * lots[0].unitCost
+            let taken = takeCost(from: 0, take: take)
+            cost += taken
             lots[0].qty -= take
+            lots[0].cost -= taken
             remain -= take
             if Money.isApproxZero(lots[0].qty) {
                 lots.removeFirst()
@@ -149,8 +167,10 @@ final class FIFOBook: AssetBook {
                 throw BookError.negativeLot(requested: qty, available: quantity)
             }
             let take = min(lots[0].qty, remain)
-            cost += take * lots[0].unitCost
+            let taken = takeCost(from: 0, take: take)
+            cost += taken
             lots[0].qty -= take
+            lots[0].cost -= taken
             remain -= take
             if Money.isApproxZero(lots[0].qty) {
                 lots.removeFirst()
@@ -164,7 +184,7 @@ final class FIFOBook: AssetBook {
     }
 
     func replaceLots(_ newLots: [(qty: Decimal, unitCost: Decimal)]) {
-        lots = newLots.filter { $0.qty > 0 }.map { Lot(qty: $0.qty, unitCost: $0.unitCost) }
+        lots = newLots.filter { $0.qty > 0 }.map { Lot(qty: $0.qty, cost: $0.qty * $0.unitCost) }
     }
 
     func snapshotUnitCost() -> Decimal {
