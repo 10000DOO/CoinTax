@@ -7,9 +7,9 @@ final class ImportService {
     private let modelContext: ModelContext
     private let registry: ParserRegistry
 
-    init(modelContext: ModelContext, registry: ParserRegistry = .v1) {
+    init(modelContext: ModelContext, registry: ParserRegistry? = nil) {
         self.modelContext = modelContext
-        self.registry = registry
+        self.registry = registry ?? .v1
     }
 
     struct ImportOutcome {
@@ -39,16 +39,17 @@ final class ImportService {
         account: AccountEntity,
         forceParserID: String? = nil,
         genericColumnMap: [String: String] = [:],
+        genericTimeZone: String = "UTC",
         pdfPassword: String? = nil
     ) throws -> ImportOutcome {
         let probe = FormatProbe.probe(url: url)
         if probe.peekText.contains("원천징수영수증") {
-            throw CoinTaxError.parserReject("거래내역 확인서가 아닙니다")
+            throw CoinTaxError.parserReject("거래내역 확인서가 아닙니다 (이자 원천징수영수증은 v1 미지원)")
         }
         let parser: any ExchangeDocumentParser
         if let force = forceParserID {
             if force == "generic-tabular-v1" {
-                parser = GenericTabularMapper(columnMap: genericColumnMap)
+                parser = GenericTabularMapper(columnMap: genericColumnMap, timeZoneIdentifier: genericTimeZone)
             } else if force == "bithumb-certificate-pdf-v1" {
                 var b = BithumbCertificatePDFParser()
                 b.password = pdfPassword
@@ -90,7 +91,7 @@ final class ImportService {
             let rows = try XLSXReader.readFirstSheetRows(url: url)
             return rows.first ?? []
         }
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let text = try CSVUtil.readText(url: url)
         return CSVUtil.parseLines(text).first ?? []
     }
 
@@ -103,7 +104,12 @@ final class ImportService {
     }
 
     private func persist(result: ParseResult, project: ProjectEntity, fileName: String, format: SourceFormat, fileData: Data?) throws -> ImportOutcome {
-        let sha = fileData.map { Fingerprint.sha256Hex(String(decoding: $0.prefix(1_000_000), as: UTF8.self)) } ?? UUID().uuidString
+        // 파일 원본 바이트 기준 해시 → 같은 파일 재import 차단 (F-IM-08)
+        let sha = fileData.map { Fingerprint.sha256Hex($0) } ?? UUID().uuidString
+        if fileData != nil,
+           let dupe = project.sourceFiles.first(where: { $0.sha256 == sha }) {
+            throw CoinTaxError.duplicateFile("\(dupe.fileName) (\(dupe.importedAt.formatted(date: .numeric, time: .shortened)) 가져옴)")
+        }
         let meta: [String: String] = [
             "ignoredCount": "\(result.ignoredCount)",
             "errorCount": "\(result.errors.count)",
@@ -121,14 +127,43 @@ final class ImportService {
         project.sourceFiles.append(sf)
         modelContext.insert(sf)
 
-        let existingFP = Set(project.events.map(\.fingerprint))
+        // ── 중복 제거 ────────────────────────────────────────────────
+        //
+        // 행 번호가 아니라 **거래 내용**으로 센다. 기간이 겹치는 export 를 다시 가져와도
+        // 같은 거래가 두 번 쌓이지 않는다 (거래ID가 없는 바이낸스 Spot·빗썸 확인서에서 실제로 발생).
+        //
+        // 개수로 비교하는 이유: 같은 초에 같은 수량·가격으로 체결된 **서로 다른** 두 건이 있을 수 있다.
+        // 이미 1건 있는데 새 파일에 2건 있으면 1건만 새로 넣는다.
+        let pid = ProjectID(project.id)
+        var existingCounts: [String: Int] = [:]
+        var existingByKey: [String: LedgerEventEntity] = [:]
+        for entity in project.events {
+            let domain = EntityMappers.event(entity, projectID: pid)
+            let key = Fingerprint.contentKey(for: domain, parserID: domain.sourceKind)
+            existingCounts[key, default: 0] += 1
+            if existingByKey[key] == nil { existingByKey[key] = entity }
+        }
+
+        var incomingCounts: [String: Int] = [:]
         var inserted = 0
         var skipped = 0
+        var dupeWarnings: [String] = []
+
         for var event in result.events {
             if event.fingerprint.isEmpty {
                 event.fingerprint = Fingerprint.make(for: event, parserID: result.parserID)
             }
-            if existingFP.contains(event.fingerprint) {
+            let key = Fingerprint.contentKey(for: event, parserID: result.parserID)
+            incomingCounts[key, default: 0] += 1
+            if incomingCounts[key]! <= (existingCounts[key] ?? 0) {
+                skipped += 1
+                continue
+            }
+            // 같은 거래ID인데 내용이 다르면 알린다 (기간 경계에서 잘린 주문 등)
+            if let ext = event.externalID, !ext.isEmpty,
+               let prior = existingByKey[key],
+               prior.quantity != Money.decimalString(event.quantity) {
+                dupeWarnings.append("같은 거래ID \(ext) 가 다른 수량으로 다시 들어왔습니다 (기존 \(prior.quantity) / 신규 \(Money.decimalString(event.quantity))) — 기존 값을 유지했습니다")
                 skipped += 1
                 continue
             }
@@ -140,6 +175,12 @@ final class ImportService {
             inserted += 1
         }
         try modelContext.save()
-        return ImportOutcome(parseResult: result, inserted: inserted, skippedDupe: skipped, sourceFileID: sf.id)
+
+        var outcomeResult = result
+        outcomeResult.warnings.append(contentsOf: dupeWarnings)
+        if skipped > 0 {
+            outcomeResult.warnings.append("이미 가져온 거래 \(skipped)건은 건너뛰었습니다 (기간이 겹치는 파일)")
+        }
+        return ImportOutcome(parseResult: outcomeResult, inserted: inserted, skippedDupe: skipped, sourceFileID: sf.id)
     }
 }

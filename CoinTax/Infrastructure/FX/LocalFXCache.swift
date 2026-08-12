@@ -1,25 +1,5 @@
 import Foundation
 
-/// In-memory FX day→rate cache (USD/KRW).
-final class LocalFXCache: @unchecked Sendable {
-    private var rates: [String: Decimal] = [:]
-    private let lock = NSLock()
-
-    func set(day: String, rate: Decimal) {
-        lock.lock(); rates[day] = rate; lock.unlock()
-    }
-
-    func get(day: String) -> Decimal? {
-        lock.lock(); defer { lock.unlock() }
-        return rates[day]
-    }
-
-    func all() -> [String: Decimal] {
-        lock.lock(); defer { lock.unlock() }
-        return rates
-    }
-}
-
 protocol FXClient: Sendable {
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal]
 }
@@ -33,6 +13,7 @@ struct RemoteFXClientStub: FXClient {
 
 enum FXPreferences {
     private static let autoKey = "fx.autoFetchEnabled"
+    private static let publicFallbackKey = "fx.allowPublicFallback"
 
     /// 기본값 true — 자동 환율 조회가 기본, 수동은 옵션.
     static var autoFetchEnabled: Bool {
@@ -41,5 +22,14 @@ enum FXPreferences {
             return UserDefaults.standard.bool(forKey: autoKey)
         }
         set { UserDefaults.standard.set(newValue, forKey: autoKey) }
+    }
+
+    /// 공개 시세 폴백 허용 여부. **기본값 false**.
+    ///
+    /// 무료 공개 시세는 외국환거래법상 기준환율이 아니다(TQ-05).
+    /// 한국은행 ECOS 인증키를 쓰는 것이 원칙이고, 폴백을 켜면 그 값을 「참고 시세」로 구분해 표시한다.
+    static var allowPublicFallback: Bool {
+        get { UserDefaults.standard.bool(forKey: publicFallbackKey) }
+        set { UserDefaults.standard.set(newValue, forKey: publicFallbackKey) }
     }
 }

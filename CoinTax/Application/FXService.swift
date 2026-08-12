@@ -67,16 +67,49 @@ final class FXService {
         return FXHolidayPolicy.resolve(eventDay: eventDay, published: published)
     }
 
+    /// 환율이 실제로 필요한 날짜 목록.
+    ///
+    /// - 과세 집계 대상이 아닌 처분(2027-01-01 이전)은 양도가액이 필요 없으므로 제외한다(리뷰 1-8).
+    /// - 당일 고시가 없어도 **직전 고시일로 대체 가능하면 누락이 아니다** (`FXHolidayPolicy`).
+    ///   대체 사실은 엔진이 계산 시 기록하므로, 여기서 합성 값을 미리 써 넣지 않는다(리뷰 1-4).
     func missingDays(for events: [LedgerEvent], project: ProjectEntity) -> [String] {
-        let rates = ratesMap(for: project)
+        let published = ratesMap(for: project)
+        let tTax = TaxTime.taxStartDate
         var days = Set<String>()
-        for e in events {
-            let needs = e.quoteAmountKRW == nil && (e.type == .buy || e.type == .sell)
-            if needs && (e.quoteAsset?.isUSDTish == true || e.quoteAsset == nil) {
-                let day = TaxTime.dayKST(e.timestamp)
-                if rates[day] == nil {
-                    days.insert(day)
-                }
+        func needDay(_ e: LedgerEvent) {
+            let day = TaxTime.dayKST(e.timestamp)
+            if FXHolidayPolicy.resolve(eventDay: day, published: published) == nil {
+                days.insert(day)
+            }
+        }
+
+        for e in events where e.type != .ignored {
+            // 과세 대상이 아닌 원화 마켓 처분은 양도가액을 계산하지 않으므로 환율이 필요 없다.
+            // 다만 **코인↔코인 처분**은 받은 견적자산(USDT 등)의 취득원가가 그 시점 원화가액이므로,
+            // 과세 시작 전 거래에도 환율이 필요하다 — 없으면 원가 0으로 시작해 세액이 부풀려진다.
+            let needsAmount: Bool
+            switch e.type {
+            case .buy: needsAmount = e.quoteAmountKRW == nil
+            case .sell: needsAmount = e.quoteAmountKRW == nil && (e.timestamp >= tTax || e.cryptoQuoteQuantity != nil)
+            default: needsAmount = false
+            }
+            if needsAmount, (e.quoteAsset == nil) || (e.quoteAsset?.isUSDTish == true) {
+                needDay(e)
+            }
+
+            // 수수료가 USD 연동 자산이면 그 환산에도 환율이 필요하다.
+            // 원화 금액이 이미 있는 매수라도 수수료가 USDT 면 환율을 써야 하므로,
+            // 위 조건만 보면 엔진이 요구하는 날짜를 놓친다.
+            let feeNeedsFX: Bool
+            switch e.type {
+            case .buy: feeNeedsFX = true
+            case .sell: feeNeedsFX = e.timestamp >= tTax
+            default: feeNeedsFX = false
+            }
+            if feeNeedsFX,
+               let fee = e.feeAmount, fee != 0,
+               let fa = e.feeAsset, fa.isUSDTish, fa != e.baseAsset {
+                needDay(e)
             }
         }
         return days.sorted()
@@ -110,30 +143,18 @@ final class FXService {
         return fetched
     }
 
-    /// 계산 직전: 누락일 자동 채움 + 휴일 미고시는 직전 고시로 해석 가능하면 합성 저장.
+    /// 계산 직전: 누락일 자동 채움. 남은 누락일 목록을 돌려준다.
+    ///
+    /// 휴일·미고시일에 대해 **합성 행을 저장하지 않는다.** 저장하면 그 날 고시가 있었던 것처럼 보여
+    /// 감사 추적이 끊긴다(리뷰 1-4). 대체는 계산 시점에 `FXHolidayPolicy`가 수행하고
+    /// 실제 고시일을 `ReplayResult.fxResolutions`에 남긴다.
     @discardableResult
     func ensureRatesForCalculation(events: [LedgerEvent], project: ProjectEntity) async throws -> [String] {
-        var missing = missingDays(for: events, project: project)
-        if !missing.isEmpty, autoFetchEnabled {
-            // 원격 조회 시 시작 전 버퍼를 위해 인접 영업일도 요청
-            let expanded = expandLookback(days: missing, back: FXHolidayPolicy.maxLookbackDays)
-            _ = try await fillMissingFromRemote(days: expanded, project: project)
-            missing = missingDays(for: events, project: project)
-        }
-        // 여전히 당일 키가 없어도 직전 고시가 있으면 previousBusinessDay 로 기록
-        let published = ratesMap(for: project)
-        for day in missing {
-            if let resolved = FXHolidayPolicy.resolve(eventDay: day, published: published),
-               resolved.usedPreviousPublished {
-                try setRate(
-                    day: day,
-                    rate: resolved.rate,
-                    project: project,
-                    source: "previousBusinessDay",
-                    sourceDate: resolved.sourceDate
-                )
-            }
-        }
+        let missing = missingDays(for: events, project: project)
+        guard !missing.isEmpty, autoFetchEnabled else { return missing }
+        // 미고시일 대체 후보를 확보하기 위해 앞쪽 며칠을 함께 요청
+        let expanded = expandLookback(days: missing, back: FXHolidayPolicy.maxLookbackDays)
+        _ = try await fillMissingFromRemote(days: expanded, project: project)
         return missingDays(for: events, project: project)
     }
 

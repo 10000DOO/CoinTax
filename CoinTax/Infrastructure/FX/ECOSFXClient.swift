@@ -67,15 +67,22 @@ struct ECOSFXClient: FXClient {
     }
 }
 
-/// 키 없이 동작하는 일별 공개 시세 폴백 (공식 기준환율 아님 — source 태깅).
+/// 키 없이 동작하는 일별 공개 시세 폴백 (**공식 기준환율 아님** — source 태깅).
 /// https://github.com/fawazahmed0/currency-api
+///
+/// ⚠️ 이 클라이언트는 **요청한 날짜에 값이 있을 때만** 반환한다.
+/// 과거로 되짚어 찾은 값을 요청일 키로 돌려주면, 휴일 대체 사실이 사라지고
+/// 장부에 "그 날 고시된 환율"로 잘못 기록된다(리뷰 1-4).
+/// 되짚기는 `FXHolidayPolicy` 한 곳에서만 수행하고 실제 고시일을 함께 남긴다.
 struct PublicUSDKRWClient: FXClient {
     var session: URLSession = .shared
+    /// 한 번의 자동 채우기에서 보낼 최대 요청 수 (요청 폭주 방지 — 리뷰 6-3)
+    var maxRequests: Int = 90
 
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal] {
         var out: [String: Decimal] = [:]
         // 병렬 제한: 순차 (rate limit 완화)
-        for day in days.sorted() {
+        for day in days.sorted().prefix(maxRequests) {
             if let rate = try await fetchOne(day: day) {
                 out[day] = rate
             }
@@ -84,29 +91,14 @@ struct PublicUSDKRWClient: FXClient {
     }
 
     private func fetchOne(day: String) async throws -> Decimal? {
-        // @latest for future dates falls back poorly — try exact day then previous days
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = TaxTime.seoul
-        let f = DateFormatter()
-        f.calendar = cal
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.timeZone = TaxTime.seoul
-        f.dateFormat = "yyyy-MM-dd"
-        guard var date = f.date(from: day) else { return nil }
-
-        for _ in 0..<10 {
-            let dstr = f.string(from: date)
-            let urls = [
-                URL(string: "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@\(dstr)/v1/currencies/usd.min.json"),
-                URL(string: "https://\(dstr).currency-api.pages.dev/v1/currencies/usd.min.json")
-            ].compactMap { $0 }
-
-            for url in urls {
-                if let rate = try? await getKRW(from: url) {
-                    return rate
-                }
+        let urls = [
+            URL(string: "https://cdn.jsdelivr.net/npm/@fawazahmed0/currency-api@\(day)/v1/currencies/usd.min.json"),
+            URL(string: "https://\(day).currency-api.pages.dev/v1/currencies/usd.min.json")
+        ].compactMap { $0 }
+        for url in urls {
+            if let rate = try? await getKRW(from: url) {
+                return rate
             }
-            date = cal.date(byAdding: .day, value: -1, to: date) ?? date
         }
         return nil
     }
@@ -134,36 +126,46 @@ struct PublicUSDKRWClient: FXClient {
 }
 
 /// ECOS 우선, 없으면 공개 폴백. 날짜별 병합.
+///
+/// **되짚기(휴일 대체)를 하지 않는다.** 고시가 있는 날짜만 그대로 반환하고,
+/// 미고시일 처리는 `FXHolidayPolicy`가 실제 고시일을 남기며 담당한다(리뷰 1-4).
 struct CompositeFXClient: FXClient {
     var ecosKeyProvider: @Sendable () -> String? = { FXKeychain.loadECOSKey() }
+    /// 공개 시세 폴백 허용 여부. 기본은 설정값(기본 false)을 따른다 — TQ-05
+    var allowPublicFallback: @Sendable () -> Bool = { FXPreferences.allowPublicFallback }
+
+    /// 조회 결과에 대한 진단 (UI 안내용)
+    enum Outcome: String, Sendable {
+        case ok                 // ECOS 로 채움
+        case noKey              // 인증키 없음 → 발급 안내 필요
+        case keyRejected        // 키가 있는데 응답이 비어 있음 → 키 확인 필요
+        case publicFallbackUsed // 공개 시세로 채움 (기준환율 아님)
+    }
+
+    /// 마지막 조회의 진단을 받아가는 콜백
+    var onOutcome: (@Sendable (Outcome) -> Void)? = nil
 
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal] {
         var result: [String: Decimal] = [:]
-        if let key = ecosKeyProvider(), !key.isEmpty {
+        let key = ecosKeyProvider()
+        let hasKey = (key?.isEmpty == false)
+
+        if hasKey, let key {
             let ecos = try await ECOSFXClient(apiKey: key).fetchUSD_KRW(days: days)
             for (k, v) in ecos { result[k] = v }
+            onOutcome?(ecos.isEmpty ? .keyRejected : .ok)
+        } else {
+            onOutcome?(.noKey)
         }
-        let missing = days.filter { result[$0] == nil }
-        if !missing.isEmpty {
-            let pub = try await PublicUSDKRWClient().fetchUSD_KRW(days: missing)
-            for (k, v) in pub where result[k] == nil {
-                result[k] = v
-            }
-        }
-        // 휴일: 요청일은 있는데 값 없으면 직전 고시일로 채움 (ECOS 범위 내)
-        if !result.isEmpty {
-            for day in days where result[day] == nil {
-                if let prev = nearestPrevious(day: day, in: result) {
-                    result[day] = prev
-                }
-            }
-        }
-        return result
-    }
 
-    private func nearestPrevious(day: String, in map: [String: Decimal]) -> Decimal? {
-        let keys = map.keys.sorted()
-        let prev = keys.filter { $0 < day }.last
-        return prev.flatMap { map[$0] }
+        let missing = days.filter { result[$0] == nil }
+        guard !missing.isEmpty, allowPublicFallback() else { return result }
+
+        let pub = try await PublicUSDKRWClient().fetchUSD_KRW(days: missing)
+        for (k, v) in pub where result[k] == nil {
+            result[k] = v
+        }
+        if !pub.isEmpty { onOutcome?(.publicFallbackUsed) }
+        return result
     }
 }
