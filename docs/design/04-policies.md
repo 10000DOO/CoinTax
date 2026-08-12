@@ -188,7 +188,8 @@ struct TaxRatePolicyV1 {
 ## 7. FXAssumptionPolicy
 
 ```swift
-// v1: USDT treated as USD 1:1; convert via USD/KRW official rate
+// v1: USD-pegged stables (USDT/USDC/USD) treated as USD 1:1; convert via USD/KRW official rate
+// 대상 판정은 `AssetSymbol.isUSDPegged` 한 곳에서만 한다 — 페그 없는 코인은 넣지 않는다
 var treatUSDTAsUSD: Bool // true
 ```
 

@@ -49,7 +49,7 @@
 | 바이낸스·OKX 원가법 | **FIFO** |
 | 전송 소실 원가 | **`abandon_lost_cost`**: 입고원가 = 출고원가×(입고수량/출고수량), 소실 분 **필요경비 미산입** |
 | 전송 소실 고지 | 아래 §2.1 문구 **그대로** (`TaxCopy.transferCost`) |
-| USDT | v1 **1 USDT = 1 USD**, 당일 **USD/KRW 기준환율** |
+| USD 페그 스테이블 | v1 **1 USDT = 1 USDC = 1 USD**, 당일 **USD/KRW 기준환율**. 대상은 `AssetSymbol.isUSDPegged` (`USDT`·`USDC`·`USD`) 뿐 — 페그 없는 코인은 넣지 않는다 |
 | 과세 시작 | 2027-01-01 00:00 **KST** |
 | 의제 기준 | 2026-12-31 24:00 **KST** 스냅샷 후 `max(장부단가, 시가)`. 비교 단위는 **보유 전체 평균이 기본**, 설정에서 **매입 건별** 전환 가능 (세무 확인 대기 TQ-01 — 두 방식 결과를 항상 함께 표시) |
 | 기본공제 | 2_500_000 KRW |
@@ -78,7 +78,7 @@
 전송 소실 원가는 공개 세법 해설이 없어, 과다 공제를 피하기 위해 필요경비·도착 취득가에 넣지 않습니다. 세액이 다소 커질 수 있으며 세무 자문이 아닙니다.
 
 // TaxCopy.usdtPeg
-USDT는 USD 1:1로 가정한 뒤 해당일 USD/KRW 기준환율로 환산합니다.
+USDT·USDC는 USD 1:1로 가정한 뒤 해당일 USD/KRW 기준환율로 환산합니다.
 
 // TaxCopy.costMethods
 빗썸 계정은 이동평균법, 바이낸스·OKX 계정은 선입선출법으로 취득가액을 계산합니다.
@@ -221,7 +221,10 @@ deductibleExpense = 0
 6. 연간 필터 taxYear  
 7. income, taxBase, national, local  
 
-시가 없으면 해당 자산 수량>0 시 **계산 blocked** (기본).
+시가 없으면 해당 자산 수량>0 시 **계산 blocked** (기본).  
+단, **아직 2027-01-01 이 오지 않았으면 경고로 낮춘다** (`TaxTime.isBeforeTaxStart`) — 그 시가는 그 시점이
+지나야 존재하므로, 차단하면 어떤 사용자도 자기 손익을 볼 수 없다. 실제 취득가로 계산하고
+「나중에 시가를 넣으면 취득가가 올라가 세금이 줄 수 있다」고 안내한다 (05-decisions §8.3).
 
 ---
 
@@ -238,13 +241,15 @@ deductibleExpense = 0
 
 [01-requirements.md](./01-requirements.md) §10 전체 + 아래:
 
-- [x] `PolicyBundle.id == "cointax-v1.0"` 리포트 표시  
-- [x] 고지 4종이 리포트·export에 포함 (PDF 다중 페이지로 잘림 없음)  
+- [x] `PolicyBundle.id == "cointax-v1.1"` 리포트 표시  
+- [ ] 고지 4종이 리포트·export에 포함 (PDF 다중 페이지로 잘림 없음)  
+      → **미충족.** 한글 고지가 PDF에서 문장 중간에 잘린다
+      ([audit-2026-08-12-verification.md](./audit-2026-08-12-verification.md) D-4). 수정 후 다시 체크할 것  
 - [x] G1 골든 (14-spec 수치) 테스트 통과  
 - [x] Critical verify 시 export 버튼 disabled  
 - [x] 적용 환율 출처(휴일 대체 시 실제 고시일)를 리포트·export에 표시  
 
-> 체크 갱신: 2026-08-11 (CoinTaxTests **55 pass**, 경고 0).
+> 체크 갱신: 2026-08-12 (CoinTaxTests **200 pass**, 경고 0).
 
 ---
 
