@@ -69,7 +69,7 @@ final class EndToEndScenarioTests: XCTestCase {
             deemed: replay.deemedPositions,
             policies: policies
         )
-        XCTAssertEqual(summary.policyBundleID, "cointax-v1.0")
+        XCTAssertEqual(summary.policyBundleID, "cointax-v1.1")
         XCTAssertEqual(summary.totalProceedsKRW, Decimal(160_000))
         XCTAssertEqual(summary.netIncomeKRW, Decimal(21_400))
         XCTAssertEqual(summary.basicDeductionKRW, Decimal(2_500_000))
@@ -99,7 +99,7 @@ final class EndToEndScenarioTests: XCTestCase {
         let pass = VerificationReport(runID: UUID(), status: "passed", issues: [], calculatedAt: Date())
         summary.verification = pass
         let csv = try ReportCSVExporter.exportCSV(summary)
-        XCTAssertTrue(csv.contains("cointax-v1.0"))
+        XCTAssertTrue(csv.contains("cointax-v1.1"))
         XCTAssertTrue(csv.contains("totalProceedsKRW"))
         XCTAssertTrue(csv.contains("basicDeductionKRW"))
         XCTAssertTrue(csv.contains("disclaimer"))

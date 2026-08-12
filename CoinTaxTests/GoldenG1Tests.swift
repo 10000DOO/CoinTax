@@ -77,6 +77,6 @@ final class GoldenG1Tests: XCTestCase {
         ))
         // may fail V-DEM if missing market for empty pre-tax — no pre-tax holdings
         XCTAssertFalse(v.issues.contains { $0.id == "V-TAX-02" && $0.severity == "critical" })
-        XCTAssertEqual(summary.policyBundleID, "cointax-v1.0")
+        XCTAssertEqual(summary.policyBundleID, "cointax-v1.1")
     }
 }

@@ -12,7 +12,7 @@ struct PolicyBundle: Sendable {
 
     static var v1Default: PolicyBundle {
         PolicyBundle(
-            id: "cointax-v1.0",
+            id: "cointax-v1.1",
             transferCost: AbandonLostCostPolicy(),
             costMethodResolver: VASPMAElseFIFOResolver(),
             deemed: MaxBookMarketDeemedPolicy(),

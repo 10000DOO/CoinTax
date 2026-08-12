@@ -345,6 +345,26 @@ enum Verifier {
             ))
         }
 
+        // ── V-IMP-05 바이낸스 입출금이 두 파일에서 겹쳐 들어왔는지 ────────
+        //
+        // Transaction History 와 입금/출금 내역은 **같은 입출금을 다르게 적는다.**
+        // 입금은 시각이 20초, 출금은 26분 다르고 출금액은 수수료 합산이다 (실측).
+        // 그래서 내용 기준 중복 제거에 걸리지 않는다 — 셋 다 넣으면 입출금이 두 번 잡혀
+        // 보유 수량과 취득원가가 통째로 부풀고 세액이 크게 틀어진다.
+        let hasBinanceTxHistory = input.events.contains { $0.sourceKind == "binance-transaction-history-csv-v1" }
+        let overlappingBinanceSources = Set(
+            input.events
+                .filter { $0.sourceKind == "binance-deposit-xlsx-v1" || $0.sourceKind == "binance-withdraw-xlsx-v1" }
+                .map(\.sourceKind)
+        )
+        if hasBinanceTxHistory, !overlappingBinanceSources.isEmpty {
+            issues.append(.init(
+                id: "V-IMP-05", severity: "critical",
+                message: "바이낸스 입출금이 두 종류의 파일에서 들어왔습니다 — Transaction History 와 입금/출금 내역은 같은 내용이라 둘 다 넣으면 입출금이 두 번 잡힙니다. 한쪽 파일을 지우고 다시 계산하세요",
+                context: (["binance-transaction-history-csv-v1"] + overlappingBinanceSources.sorted()).joined(separator: " + ")
+            ))
+        }
+
         // ── V-IMP-01 중복 fingerprint ──────────────────────────────────
         var seenFP: Set<String> = []
         var dupeFP: Set<String> = []

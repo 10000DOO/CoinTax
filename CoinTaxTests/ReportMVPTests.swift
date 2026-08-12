@@ -4,7 +4,7 @@ import XCTest
 final class ReportMVPTests: XCTestCase {
     func testPolicyBundleAndTaxCopyLocked() {
         let p = PolicyBundle.v1Default
-        XCTAssertEqual(p.id, "cointax-v1.0")
+        XCTAssertEqual(p.id, "cointax-v1.1")
         XCTAssertEqual(p.disclaimers.count, 4)
         XCTAssertEqual(p.disclaimers[0], TaxCopy.notTaxAdvice)
         XCTAssertEqual(p.disclaimers[1], TaxCopy.transferCost)

@@ -32,7 +32,8 @@ enum ImportRouter {
         switch id {
         case "bithumb-certificate-pdf-v1":
             return .bithumb
-        case "binance-spot-xlsx-v1", "binance-deposit-xlsx-v1", "binance-withdraw-xlsx-v1":
+        case "binance-spot-xlsx-v1", "binance-deposit-xlsx-v1", "binance-withdraw-xlsx-v1",
+             "binance-transaction-history-csv-v1":
             return .binance
         case "okx-trading-history-csv-v1", "okx-funding-history-csv-v1":
             return .okx

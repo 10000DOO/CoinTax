@@ -93,7 +93,7 @@ final class FXService {
             case .sell: needsAmount = e.quoteAmountKRW == nil && (e.timestamp >= tTax || e.cryptoQuoteQuantity != nil)
             default: needsAmount = false
             }
-            if needsAmount, (e.quoteAsset == nil) || (e.quoteAsset?.isUSDTish == true) {
+            if needsAmount, (e.quoteAsset == nil) || (e.quoteAsset?.isUSDPegged == true) {
                 needDay(e)
             }
             // 코인으로 낸 수수료는 환율이 필요 없다 — 엔진이 그 자산 장부에서 처분해

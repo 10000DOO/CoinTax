@@ -35,9 +35,14 @@ xcodebuild -xctestrun "$RUN" -destination 'platform=macOS,arch=arm64' \
   -only-testing:CoinTaxTests -parallel-testing-enabled NO \
   test-without-building >"$LOG" 2>&1 || true
 
-# 판정은 **마지막 합계 줄**로만 한다.
-# 개별 스위트 줄에도 "with 0 failures" 가 나오므로, 아무 줄이나 grep 하면 실패를 놓친다.
-SUMMARY="$(grep -E "Executed [0-9]+ tests?, with [0-9]+ failures?" "$LOG" | tail -1)"
+# 판정은 **마지막 합계 줄**로 하되, 실패 줄이 하나라도 있으면 무조건 실패로 본다.
+#
+# 예전 규칙(`with [0-9]+ failures`)은 skip 이 섞인 합계
+# ("with 3 tests skipped and 7 failures")에 안 걸렸다. 그러면 `tail -1` 이
+# 아무 스위트 줄("with 0 failures")을 집어 **실패 7건을 SMOKE OK 로 보고했다.**
+# 그래서 합계 파싱과 실패 줄 카운트를 **둘 다** 본다 — 한쪽이 형식 변화로 새면 다른 쪽이 잡는다.
+SUMMARY="$(grep -aE "Executed [0-9]+ tests?, with .*(failure|failures)" "$LOG" | tail -1)"
+FAIL_LINES="$(grep -acE "^Test Case .* failed \(" "$LOG" || true)"
 
 if [ -z "$SUMMARY" ]; then
   echo "--- 테스트 결과를 판정할 수 없습니다 ---"
@@ -46,11 +51,11 @@ if [ -z "$SUMMARY" ]; then
 fi
 
 echo "$SUMMARY"
-if echo "$SUMMARY" | grep -qE "with 0 failures"; then
+if echo "$SUMMARY" | grep -qE "and 0 failures|with 0 failures" && [ "$FAIL_LINES" -eq 0 ]; then
   echo "SMOKE OK"
   exit 0
 fi
 
-echo "--- 실패 상세 ---"
-grep -E "error:.*-\[CoinTaxTests|^Test Case.*failed" "$LOG" | head -40
+echo "--- 실패 상세 (실패한 테스트 $FAIL_LINES 건) ---"
+grep -aE "error:.*-\[CoinTaxTests|^Test Case.*failed" "$LOG" | head -40
 exit 1

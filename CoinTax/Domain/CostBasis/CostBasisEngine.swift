@@ -148,7 +148,7 @@ struct CostBasisEngine {
         func isUSDLinkedQuote(_ e: LedgerEvent) -> Bool {
             guard let qa = e.quoteAsset else { return true } // 견적 미기재 → USDT 마켓 가정 (기존 동작)
             if qa.isKRW { return false }
-            return qa.isUSDTish && policies.fxAssumption.usdtEqualsUSD
+            return qa.isUSDPegged && policies.fxAssumption.usdtEqualsUSD
         }
 
         /// 견적 금액(견적 자산 단위)을 KRW로 환산. 실패 시 nil + 이슈 기록.
@@ -241,7 +241,7 @@ struct CostBasisEngine {
                         id: "V-QTY-02", severity: dust ? "warning" : "critical",
                         message: dust
                             ? "사용한 \(quote.code)가 장부보다 \(Money.decimalString(out.shortfallQty)) 많습니다 (거래소 반올림 수준)"
-                            : "보유한 \(quote.code)보다 많이 사용한 거래입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(quote.code)) — 이 계정의 거래내역이 시작되기 전 보유분이 있거나 입금·전송 내역이 빠졌을 수 있습니다. 더 이전 기간 원본을 함께 가져오세요",
+                            : "보유한 \(quote.code)보다 많이 사용한 거래입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(quote.code)) — ① 이자·리베이트·에어드롭처럼 거래·입출금이 아닌 방식으로 들어온 기록이 빠졌거나 ② 이 계정의 거래내역 시작 전 보유분이 있습니다. 바이낸스는 「Transaction History」, OKX는 「Funding History」를 함께 넣고, 그래도 남으면 더 이전 기간 원본을 받으세요",
                         context: "\(e.baseAsset.code)/\(quote.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
                     ))
                 }
@@ -414,7 +414,7 @@ struct CostBasisEngine {
                                 id: "V-QTY-02", severity: dust ? "warning" : "critical",
                                 message: dust
                                     ? "출금 수량이 장부보다 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code) 많습니다 (거래소 반올림 수준)"
-                                    : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — 이 계정의 거래내역이 시작되기 전 보유분이 있거나 내역 일부가 빠졌을 수 있습니다. 더 이전 기간 원본을 함께 가져오세요",
+                                    : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — ① 이자·리베이트·에어드롭처럼 거래·입출금이 아닌 방식으로 들어온 기록이 빠졌거나 ② 이 계정의 거래내역 시작 전 보유분이 있습니다. 바이낸스는 「Transaction History」, OKX는 「Funding History」를 함께 넣고, 그래도 남으면 더 이전 기간 원본을 받으세요",
                                 context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
                             ))
                         }

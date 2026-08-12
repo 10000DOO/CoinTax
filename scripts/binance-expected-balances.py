@@ -71,7 +71,7 @@ def parse_time(value, tz):
 
 
 def find_files():
-    out = {"spot": [], "deposit": [], "withdraw": []}
+    out = {"spot": [], "deposit": [], "withdraw": [], "tx": []}
     for dirpath, _, names in os.walk(RAW):
         if os.path.basename(dirpath) == "derived":
             continue
@@ -80,13 +80,25 @@ def find_files():
             if not low.endswith(".csv") or "binance" not in low:
                 continue
             path = os.path.join(dirpath, n)
-            if "spot" in low:
+            # Transaction History 를 먼저 본다 — "transaction" 안에 없는 단어로 걸러야
+            # spot/deposit/withdraw 분기에 잘못 빨려 들어가지 않는다
+            if "transaction-history" in low or "transaction history" in low:
+                out["tx"].append(path)
+            elif "spot" in low:
                 out["spot"].append(path)
             elif "deposit" in low:
                 out["deposit"].append(path)
             elif "withdraw" in low:
                 out["withdraw"].append(path)
     return out
+
+
+# Transaction History 에서 잔고에 영향을 주는 종류.
+# 매매(Transaction Buy/Spend/Fee/Sold/Revenue)는 Spot 파일에서 이미 세므로 여기서는 뺀다.
+TX_SKIP = {
+    "Transaction Buy", "Transaction Spend", "Transaction Fee",
+    "Transaction Sold", "Transaction Revenue", "Transaction Related",
+}
 
 
 def collect_events():
@@ -129,6 +141,26 @@ def collect_events():
             # 그 밖의 코인 수수료 (BNB 등)
             if fee and fee_unit and fee_unit not in ("KRW",) and fee_unit != base:
                 events.append((ts, fee_unit, -fee))
+
+    # Transaction History: 입출금·보상·코인 바꾸기. `Change` 부호를 그대로 더하면 끝이다
+    # (출금의 Change 는 수수료까지 합친 총량 — Remark 가 "Withdraw fee is included").
+    for path in files["tx"]:
+        tz = file_timezone(os.path.basename(path))
+        rows = read_csv(path)
+        header = [h.strip() for h in rows[0]]
+        idx = {h: i for i, h in enumerate(header)}
+        date_key = next(k for k in ("UTC_Time", "Time", "Date(UTC)") if k in idx)
+        for row in rows[1:]:
+            if len(row) < len(header):
+                continue
+            op = row[idx["Operation"]].strip()
+            if op in TX_SKIP:
+                continue
+            ts = parse_time(row[idx[date_key]], tz)
+            change, _ = split_amount_unit(row[idx["Change"]])
+            if ts is None or change is None or change == 0:
+                continue
+            events.append((ts, row[idx["Coin"]].strip(), change))
 
     for path in files["deposit"]:
         tz = file_timezone(os.path.basename(path))

@@ -1,0 +1,10 @@
+User ID,Time,Account,Operation,Coin,Change,Remark
+000000,2026-01-02 10:00:00,Spot,Deposit,USDT,1000,
+000000,2026-01-03 11:00:00,Spot,Transaction Buy,BTC,0.01,
+000000,2026-01-03 11:00:00,Spot,Transaction Spend,USDT,-900,
+000000,2026-01-03 11:00:00,Spot,Transaction Fee,BNB,-0.001,
+000000,2026-01-04 12:00:00,Spot,Referral Commission,USDC,2.5,
+000000,2026-01-05 13:00:01,Spot,Binance Convert,USDC,-2.5,
+000000,2026-01-05 13:00:02,Spot,Binance Convert,USDT,2.49,
+000000,2026-01-06 14:00:00,Spot,Withdraw,BTC,-0.005,Withdraw fee is included
+000000,2026-01-07 15:00:00,Spot,Simple Earn Flexible Interest,USDT,0.12,

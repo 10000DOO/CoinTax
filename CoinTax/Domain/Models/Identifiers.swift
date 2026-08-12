@@ -83,5 +83,10 @@ struct AssetSymbol: Hashable, Codable, Sendable, CustomStringConvertible {
 
     var description: String { code }
     var isKRW: Bool { code == "KRW" }
-    var isUSDTish: Bool { code == "USDT" || code == "USD" }
+    /// USD 1:1 연동으로 보는 자산. 이 자산이 견적이면 그날 USD/KRW 로 환산한다.
+    ///
+    /// USDC 를 빼면 「코인 바꾸기(USDC→USDT)」가 원화 환산 근거를 못 찾아
+    /// 취득가 0원 + Critical 로 계산이 막힌다 (실데이터에서 실제로 발생).
+    /// 페그가 없는 코인을 넣으면 근거 없는 환산이 되므로 **USD 페그 스테이블만** 넣는다.
+    var isUSDPegged: Bool { code == "USDT" || code == "USDC" || code == "USD" }
 }

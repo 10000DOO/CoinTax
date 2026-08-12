@@ -148,21 +148,27 @@ struct ImportView: View {
     private var binanceChecklist: some View {
         let names = (env.currentProject?.sourceFiles ?? []).map { $0.fileName.lowercased() + " " + $0.parserID.lowercased() }
         let spot = names.contains { $0.contains("spot") }
-        let deposit = names.contains { $0.contains("deposit") }
-        let withdraw = names.contains { $0.contains("withdraw") }
+        let txHistory = names.contains { $0.contains("transaction-history") || $0.contains("transaction history") }
+        // 예전 조합(입금내역 + 출금내역)도 계속 받는다 — 이미 그렇게 넣어 둔 자료가 있다
+        let legacyInOut = names.contains { $0.contains("deposit") } && names.contains { $0.contains("withdraw") }
         return VStack(alignment: .leading, spacing: 6) {
-            Text("바이낸스는 파일 3개가 다 있어야 합니다")
+            Text("바이낸스는 파일 2개가 다 있어야 합니다")
                 .font(Theme.caption.weight(.semibold))
                 .foregroundStyle(.secondary)
             HStack(spacing: Theme.gap) {
-                checkItem("거래내역", spot)
-                checkItem("입금내역", deposit)
-                checkItem("출금내역", withdraw)
+                checkItem("거래내역 (Spot Trade History)", spot)
+                checkItem("입출금 (Transaction History)", txHistory || legacyInOut)
             }
-            if spot && !(deposit && withdraw) {
-                Text("입출금 내역이 없으면 국내에서 보낸 코인의 취득원가가 이어지지 않아 세금이 실제보다 커집니다.")
+            if spot && !(txHistory || legacyInOut) {
+                Text("Transaction History 가 없으면 입출금은 물론 리퍼럴 보상·코인 바꾸기로 들어온 코인이 빠져, 「보유보다 많이 썼다」로 계산이 막히고 세금이 실제보다 커집니다.")
                     .font(Theme.caption)
                     .foregroundStyle(Theme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if txHistory && legacyInOut {
+                Text("Transaction History 와 입금·출금 내역이 같이 들어와 있습니다 — 같은 입출금이 두 번 잡힙니다. 한쪽을 지우세요.")
+                    .font(Theme.caption)
+                    .foregroundStyle(Theme.danger)
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
@@ -270,7 +276,7 @@ struct ImportView: View {
         VStack(alignment: .leading, spacing: Theme.gap) {
             Text("파일 받는 곳").font(Theme.cardTitle)
             guideRow("빗썸", "고객센터 → 거래내역 확인서 → 기간 선택 후 PDF 발급")
-            guideRow("바이낸스", "지갑 → 거래내역 / 입금내역 / 출금내역 각각 CSV 내려받기 (3개 모두)")
+            guideRow("바이낸스", "거래내역은 «Spot Trade History», 입출금은 «Transaction History» CSV 2개. Transaction History 에 리퍼럴 보상·코인 바꾸기까지 들어 있어야 잔고가 맞습니다")
             guideRow("OKX", "자산 → 거래내역(Trading History) · 입출금내역(Funding History) CSV")
             Divider()
             Text("기간은 **처음 거래한 날부터** 잡으세요. 앞부분이 빠지면 그때 갖고 있던 코인의 취득가를 알 수 없어 세금이 커집니다.")

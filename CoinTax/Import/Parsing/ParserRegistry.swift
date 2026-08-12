@@ -7,6 +7,7 @@ struct ParserRegistry: Sendable {
         ParserRegistry(parsers: [
             OKXFundingHistoryCSVParser(),
             OKXTradingHistoryCSVParser(),
+            BinanceTransactionHistoryCSVParser(),
             BinanceDepositXLSXParser(),
             BinanceWithdrawXLSXParser(),
             BinanceSpotXLSXParser(),
