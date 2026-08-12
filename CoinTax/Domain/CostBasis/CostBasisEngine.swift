@@ -117,11 +117,21 @@ struct CostBasisEngine {
             "\(accountID.raw.uuidString)|\(asset.code)"
         }
 
+        /// 원가법은 **정책**이 정한다 (05-decisions §1.2 「빗썸=이동평균」은 확정 결정).
+        ///
+        /// 예전에는 계정에 저장된 값을 그대로 썼다. 지금은 계정을 만들 때 올바른 값이 들어가
+        /// 결과가 같지만, 저장 값이 한 번 틀어지면 **확정 결정이 조용히 무시된다** (감사 D-8).
+        /// 진실 원천을 정책 하나로 좁힌다.
+        func costMethod(for accountID: AccountID) -> CostBasisMethod {
+            guard let account = accountsByID[accountID] else { return .fifo }
+            return policies.costMethodResolver.method(for: account)
+        }
+
         func book(for accountID: AccountID, asset: AssetSymbol) -> AssetBook {
             let key = asset.code
             if books[accountID] == nil { books[accountID] = [:] }
             if let existing = books[accountID]![key] { return existing }
-            let method = accountsByID[accountID]?.costMethod ?? .fifo
+            let method = costMethod(for: accountID)
             let b = AssetBookFactory.make(method)
             books[accountID]![key] = b
             return b
@@ -292,7 +302,7 @@ struct CostBasisEngine {
                     costKRW: out.costKRW,
                     feesKRW: 0, // 체결 수수료는 취득한 자산의 원가에 가산했다 (이중 계상 금지)
                     pnlKRW: quoteKRW - out.costKRW,
-                    method: accountsByID[e.accountID]?.costMethod ?? .fifo,
+                    method: costMethod(for: e.accountID),
                     taxYear: TaxTime.calendarYearKST(e.timestamp),
                     fxRateUsed: fxResolvedByDay[TaxTime.dayKST(e.timestamp)]?.rate,
                     fxSourceDate: fxResolvedByDay[TaxTime.dayKST(e.timestamp)]?.sourceDate,
@@ -394,7 +404,7 @@ struct CostBasisEngine {
                     // 2027 이 오기 전에는 자기 손익을 볼 방법이 아예 없다 (리포트가 늘 0원).
                     // `taxYear` 로 연도가 구분되고, 집계기가 과세연도에는 2027 이후만 담는다.
                     let pnl = proceeds - out.costKRW - fees
-                    let method = accountsByID[e.accountID]?.costMethod ?? .fifo
+                    let method = costMethod(for: e.accountID)
                     disposals.append(DisposalRecord(
                         id: UUID(),
                         eventID: e.id,
