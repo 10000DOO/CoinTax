@@ -218,7 +218,7 @@ struct CostBasisEngine {
         /// - 매도: 받은 견적자산을 그 시점 원화가액으로 입고
         ///
         /// 이 leg 이 없으면 USDT 수량이 줄지 않아 보유·평단·의제취득가가 모두 틀린다.
-        func processQuoteLeg(_ e: LedgerEvent, quoteKRW: Decimal?, recordTaxDisposals: Bool) {
+        func processQuoteLeg(_ e: LedgerEvent, quoteKRW: Decimal?) {
             guard let quote = e.quoteAsset, let quoteQty = e.cryptoQuoteQuantity else { return }
             guard let quoteKRW else {
                 // 원화 환산 실패는 `krwFromQuote` 가 이미 Critical(V-FX-01)로 기록했다.
@@ -245,7 +245,6 @@ struct CostBasisEngine {
                         context: "\(e.baseAsset.code)/\(quote.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
                     ))
                 }
-                guard recordTaxDisposals, e.timestamp >= tTax else { return }
                 disposals.append(DisposalRecord(
                     id: UUID(),
                     eventID: e.id,
@@ -270,7 +269,7 @@ struct CostBasisEngine {
             }
         }
 
-        func process(_ list: [LedgerEvent], recordTaxDisposals: Bool) {
+        func process(_ list: [LedgerEvent]) {
             for e in list {
                 switch e.type {
                 case .buy:
@@ -291,7 +290,7 @@ struct CostBasisEngine {
                     // 순서: 견적자산 지출 → 수수료 지출 → 기초자산 입고.
                     // 수수료를 견적자산(USDT)으로 내면 같은 장부를 두 번 건드리므로 순서가 원가에 영향을 준다.
                     // 실제 거래 순서(대금 먼저, 수수료 나중)를 그대로 따른다.
-                    processQuoteLeg(e, quoteKRW: quoteKRW, recordTaxDisposals: recordTaxDisposals)
+                    processQuoteLeg(e, quoteKRW: quoteKRW)
                     // 환산 불가 — 원가 0으로 두고 Critical 이슈로 보고 (계산은 계속)
                     var cost = quoteKRW ?? 0
                     // base 수수료는 수량에 반영했으므로 금액에서 제외
@@ -333,23 +332,18 @@ struct CostBasisEngine {
                     // 견적자산 원화가액은 **과세 대상이 아닌 처분에도** 필요하다.
                     // 코인↔코인 매도로 받은 USDT 의 취득원가가 곧 이 값이고,
                     // 그 원가가 2026-12-31 의제취득가와 이후 처분손익의 출발점이 된다.
-                    // (원화 마켓 매도는 여전히 환율이 필요 없다 — 과세 대상일 때만 계산한다)
-                    let isTaxable = recordTaxDisposals && e.timestamp >= tTax
-                    let needsQuoteKRW = isTaxable || e.cryptoQuoteQuantity != nil
                     var proceeds: Decimal = 0
                     var usedFX: FXResolvedRate?
                     var quoteKRW: Decimal?
-                    if needsQuoteKRW {
-                        if let krw = e.quoteAmountKRW {
-                            proceeds = Money.abs(krw)
-                            quoteKRW = proceeds
-                        } else if let conv = krwFromQuote(e, quote: quoteAmount(e), purpose: "양도가액") {
-                            proceeds = conv.krw
-                            quoteKRW = conv.krw
-                            usedFX = conv.fx
-                        }
+                    if let krw = e.quoteAmountKRW {
+                        proceeds = Money.abs(krw)
+                        quoteKRW = proceeds
+                    } else if let conv = krwFromQuote(e, quote: quoteAmount(e), purpose: "양도가액") {
+                        proceeds = conv.krw
+                        quoteKRW = conv.krw
+                        usedFX = conv.fx
                     }
-                    processQuoteLeg(e, quoteKRW: quoteKRW, recordTaxDisposals: recordTaxDisposals)
+                    processQuoteLeg(e, quoteKRW: quoteKRW)
 
                     // **수수료 처리는 과세 여부보다 앞선다.** 수수료로 나간 코인은 과세 시작 전에도
                     // 지갑에서 실제로 빠지므로, 여기서 장부에 반영하지 않으면 2026-12-31 보유 수량이
@@ -359,8 +353,10 @@ struct CostBasisEngine {
                     // 원본이 이미 순액인 판본(OKX Balance Change)만 중복 차감을 피해 건너뛴다.
                     let feeSkip: AssetSymbol? = e.quantityIsNetOfFee ? e.baseAsset : nil
                     let fees = feeCostKRW(e, skipAsset: feeSkip)
-                    guard isTaxable else { continue }
 
+                    // 과세 시작(2027) 전 처분도 기록한다. 신고 대상은 아니지만, 기록하지 않으면
+                    // 2027 이 오기 전에는 자기 손익을 볼 방법이 아예 없다 (리포트가 늘 0원).
+                    // `taxYear` 로 연도가 구분되고, 집계기가 과세연도에는 2027 이후만 담는다.
                     let pnl = proceeds - out.costKRW - fees
                     let method = accountsByID[e.accountID]?.costMethod ?? .fifo
                     disposals.append(DisposalRecord(
@@ -508,7 +504,7 @@ struct CostBasisEngine {
             }
         }
 
-        process(pass1, recordTaxDisposals: false)
+        process(pass1)
 
         // 과세 시작 시점에 「이동 중」인 전송이 있으면 그 수량은 어느 계정 장부에도 없다.
         // 의제취득가(2027-01-01 0시 보유분) 대상에서 빠지므로 사용자가 알아야 한다.
@@ -539,9 +535,12 @@ struct CostBasisEngine {
             let market = marketPrices[assetCode]
             if market == nil {
                 missingMarket.insert(assetCode)
+                let pending = TaxTime.isBeforeTaxStart()
                 issues.append(.init(
-                    id: "V-DEM-04", severity: "critical",
-                    message: "2027-01-01 0시 시가가 없어 의제취득가를 확정할 수 없습니다",
+                    id: "V-DEM-04", severity: pending ? "warning" : "critical",
+                    message: pending
+                        ? "2027-01-01 0시 시가는 그날이 지나야 나옵니다 — 지금은 실제 산 값으로 계산했습니다 (그때 넣으면 취득가가 올라가 세금이 줄 수 있습니다)"
+                        : "2027-01-01 0시 시가가 없어 의제취득가를 확정할 수 없습니다",
                     context: assetCode
                 ))
             }
@@ -607,7 +606,7 @@ struct CostBasisEngine {
             }
         }
 
-        process(pass2, recordTaxDisposals: true)
+        process(pass2)
 
         // 모든 확정 링크의 입금은 계산 대상에 있어야 한다(링크 채택 단계에서 확인). 그래도 남았다면
         // 원가가 어디에도 입고되지 않은 것이므로 조용히 넘기지 않는다.

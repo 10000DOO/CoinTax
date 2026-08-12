@@ -38,6 +38,20 @@ final class ProjectEntity {
         self.defaultTaxYear = defaultTaxYear
         self.notes = notes
     }
+
+    /// 화면에 처음 보여줄 연도. 2027 과세 시작 전에는 그해 처분이 있을 수 없어 늘 0원이 나오므로,
+    /// 자료가 있는 마지막 해를 보여준다 (「27년 규정이 그때 있었다면」 예상).
+    var displayTaxYear: Int {
+        guard TaxTime.isBeforeTaxStart() else { return defaultTaxYear }
+        let years = events.map { TaxTime.calendarYearKST($0.timestamp) }.filter { $0 < TaxTime.taxStartYear }
+        return years.max() ?? defaultTaxYear
+    }
+
+    /// 리포트 연도 선택지 — 자료가 있는 해 + 과세 연도들
+    var selectableTaxYears: [Int] {
+        let fromData = Set(events.map { TaxTime.calendarYearKST($0.timestamp) }.filter { $0 < TaxTime.taxStartYear })
+        return (fromData.sorted() + Array(TaxTime.taxStartYear...2035))
+    }
 }
 
 @Model

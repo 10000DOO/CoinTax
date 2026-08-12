@@ -24,6 +24,10 @@ enum ReportCSVExporter {
         }
         meta("transferCostPolicy", "abandon_lost_cost")
         meta("taxYear", "\(summary.taxYear)")
+        // 과세 시작 전 연도는 신고 대상이 아니다 — 파일만 보고 신고자료로 오해하면 안 된다
+        if summary.taxYear < TaxTime.taxStartYear {
+            meta("estimateOnly", "과세 시작(2027-01-01) 전 연도 — 신고 대상 아님. 27년 규정을 적용해 본 예상입니다")
+        }
         meta("status", summary.status.rawValue)
         meta("verification", summary.verification?.status ?? "")
         meta("calculatedAt", ISO8601DateFormatter().string(from: summary.calculatedAt))

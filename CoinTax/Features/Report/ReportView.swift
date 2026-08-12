@@ -11,12 +11,14 @@ struct ReportView: View {
     @State private var showAllDisposals = false
 
     var body: some View {
-        Page(title: "세금 리포트", subtitle: "\(taxYear)년 귀속 가상자산 기타소득") {
+        Page(title: "세금 리포트", subtitle: isPreviewYear ? "\(taxYear)년 거래 손익 · 27년 규정 적용 시" : "\(taxYear)년 귀속 가상자산 기타소득") {
             Picker("", selection: $taxYear) {
-                ForEach(2027...2035, id: \.self) { Text("\($0)년").tag($0) }
+                ForEach(env.currentProject?.selectableTaxYears ?? Array(2027...2035), id: \.self) { y in
+                    Text(y < TaxTime.taxStartYear ? "\(y)년 (예상)" : "\(y)년").tag(y)
+                }
             }
             .labelsHidden()
-            .frame(width: 92)
+            .frame(width: 110)
 
             Button {
                 calculate()
@@ -45,12 +47,19 @@ struct ReportView: View {
                        tone: .warning, actionTitle: "다시 계산") { calculate() }
             }
             if let message { Banner(text: message, tone: messageTone, systemImage: bannerIcon) }
+            if isPreviewYear {
+                Banner(
+                    text: "\(taxYear)년은 과세 시작(2027-01-01) 전이라 실제로 신고할 세금이 아닙니다. 그해 실제 거래 손익에 2027년 규정(기본공제 250만 원 · 세율 22%)을 그대로 적용하면 얼마가 나오는지 보여줍니다.",
+                    tone: .neutral, systemImage: "info.circle"
+                )
+            }
 
             if let c = env.lastCalculation {
                 taxFlowCard(c)
                 verificationCard(c)
                 if !c.summary.disposals.isEmpty { assetBreakdownCard(c) }
-                if !c.summary.deemed.isEmpty { deemedCard(c) }
+                // 의제취득가는 2027 이후 처분에만 쓰인다 — 예상 연도에서는 볼 이유가 없다
+                if !isPreviewYear, !c.summary.deemed.isEmpty { deemedCard(c) }
                 if !c.summary.disposals.isEmpty { disposalsCard(c) }
                 if !c.summary.fxSources.isEmpty { fxCard(c) }
                 noticesCard(c)
@@ -63,8 +72,11 @@ struct ReportView: View {
                 ) { calculate() }
             }
         }
-        .onAppear { taxYear = env.lastCalculation?.summary.taxYear ?? env.currentProject?.defaultTaxYear ?? 2027 }
+        .onAppear { taxYear = env.lastCalculation?.summary.taxYear ?? env.currentProject?.displayTaxYear ?? 2027 }
     }
+
+    /// 과세 시작 전 연도 — 실제 신고분이 아니라 「규정을 그대로 적용하면」 예상이다
+    private var isPreviewYear: Bool { taxYear < TaxTime.taxStartYear }
 
     // MARK: 세액이 나오는 과정
 
@@ -73,7 +85,8 @@ struct ReportView: View {
         return Card {
             HStack(alignment: .top) {
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("예상 납부 세액").font(Theme.caption).foregroundStyle(.secondary)
+                    Text(isPreviewYear ? "27년 규정 적용 시 세액" : "예상 납부 세액")
+                        .font(Theme.caption).foregroundStyle(.secondary)
                     Text(Fmt.krwString(s.totalTaxKRW)).font(Theme.heroNumber)
                 }
                 Spacer()

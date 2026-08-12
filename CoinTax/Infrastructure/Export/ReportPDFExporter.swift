@@ -71,6 +71,11 @@ enum ReportPDFExporter {
         lines.append("CoinTax 과세연도 요약 (참고용 · 세무 자문 아님)")
         lines.append("PolicyBundle: \(s.policyBundleID)")
         lines.append("연도: \(s.taxYear)  상태: \(s.status.rawValue)  검증: \(s.verification?.status ?? "-")")
+        // 과세 시작 전 연도는 신고 대상이 아니다 — 인쇄물만 보고 신고자료로 오해하면 안 된다
+        if s.taxYear < TaxTime.taxStartYear {
+            lines.append("※ \(s.taxYear)년은 과세 시작(2027-01-01) 전이라 신고 대상이 아닙니다.")
+            lines.append("   그해 실제 거래 손익에 2027년 규정을 적용해 본 예상입니다.")
+        }
         lines.append("")
         lines.append("총수입(양도가): \(krw(s.totalProceedsKRW)) 원")
         lines.append("필요경비: \(krw(s.totalCostsKRW)) 원")

@@ -221,7 +221,7 @@ struct HomeView: View {
         }
     }
 
-    private var taxYear: Int { env.lastCalculation?.summary.taxYear ?? env.currentProject?.defaultTaxYear ?? 2027 }
+    private var taxYear: Int { env.lastCalculation?.summary.taxYear ?? env.currentProject?.displayTaxYear ?? 2027 }
 
     private func reload() {
         projects = (try? env.projectService.fetchProjects()) ?? []
@@ -248,7 +248,7 @@ struct HomeView: View {
         message = nil
         Task {
             do {
-                let result = try await env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
+                let result = try await env.pipeline.calculate(project: project, taxYear: project.displayTaxYear)
                 env.lastCalculation = result
                 env.calculationStale = false
                 message = nil

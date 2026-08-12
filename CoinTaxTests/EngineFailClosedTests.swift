@@ -117,8 +117,14 @@ final class EngineFailClosedTests: XCTestCase {
         )
         let replay = try engine(accounts: [acc], market: ["BTC": 60_000_000]).replay(events: [buy, oldSell], links: [])
         XCTAssertTrue(replay.missingFXDays.isEmpty, "과세 대상 아닌 원화 처분에 환율을 요구하지 않는다")
-        XCTAssertTrue(replay.disposals.isEmpty)
         XCTAssertFalse(replay.issues.contains { $0.id == "V-FX-01" })
+        // 신고 대상은 아니지만 손익은 기록한다 — 2027 전에도 「지금까지 얼마 벌었나」를 볼 수 있어야 한다.
+        // 취득 2 BTC / 1억 → 평단 5천만, 6천만에 1 BTC 매도 → 1천만 이익.
+        let old = try XCTUnwrap(replay.disposals.first)
+        XCTAssertEqual(old.taxYear, 2026)
+        XCTAssertEqual(old.proceedsKRW, 60_000_000)
+        XCTAssertEqual(old.costKRW, 50_000_000)
+        XCTAssertEqual(old.pnlKRW, 10_000_000)
         // 남은 1 BTC 는 의제 적용을 받는다
         XCTAssertEqual(replay.deemedPositions.first?.deemedUnitKRW, 60_000_000)
     }

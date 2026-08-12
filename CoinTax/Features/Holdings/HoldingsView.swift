@@ -105,7 +105,7 @@ struct HoldingsView: View {
         message = nil
         Task {
             do {
-                let result = try await env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
+                let result = try await env.pipeline.calculate(project: project, taxYear: project.displayTaxYear)
                 env.lastCalculation = result
                 env.calculationStale = false
             } catch {

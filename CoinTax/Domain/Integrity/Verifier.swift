@@ -82,8 +82,12 @@ enum Verifier {
         }
 
         // ── V-TAX-05 과세 시작일 이전 처분 배제 ────────────────────────
+        //
+        // 2027 이전 연도를 고른 「예상」 계산은 그 해 처분을 일부러 담는다 — 여기서 막으면 안 된다.
+        // 과세연도(2027 이후) 합계에 이전 처분이 섞이는 것만 잡는다.
         let tTax = TaxTime.taxStartDate
-        if let early = s.disposals.first(where: { $0.timestamp < tTax }) {
+        let previewYear = s.taxYear < TaxTime.taxStartYear
+        if !previewYear, let early = s.disposals.first(where: { $0.timestamp < tTax }) {
             issues.append(.init(
                 id: "V-TAX-05", severity: "critical",
                 message: "과세 시작일(2027-01-01 KST) 이전 처분이 과세 합계에 포함되었습니다",
@@ -99,7 +103,11 @@ enum Verifier {
         }
         // 선택한 연도 밖에도 과세 처분이 있으면 알린다.
         // 리포트는 한 해만 보여주므로, 조용히 두면 **다른 해 신고를 빠뜨린다**.
-        let otherYears = Dictionary(grouping: r.disposals.filter { $0.taxYear != s.taxYear }, by: \.taxYear)
+        // 과세 시작 전 처분도 장부에는 남지만 신고 대상이 아니다 — 「다른 해도 신고하라」에 넣으면 안 된다.
+        let otherYears = Dictionary(
+            grouping: r.disposals.filter { $0.taxYear != s.taxYear && $0.taxYear >= TaxTime.taxStartYear },
+            by: \.taxYear
+        )
             .map { (year: $0.key, count: $0.value.count) }
             .sorted { $0.year < $1.year }
         if !otherYears.isEmpty {
@@ -275,9 +283,13 @@ enum Verifier {
         }
         // ── V-DEM-04 시가 누락 ─────────────────────────────────────────
         if !r.missingMarketAssets.isEmpty {
+            // 아직 2027-01-01 이 오지 않았으면 그 시가는 존재할 수 없다 — 막으면 안 된다.
+            let pending = TaxTime.isBeforeTaxStart()
             issues.append(.init(
-                id: "V-DEM-04", severity: "critical",
-                message: "의제 시가 누락 — 2027-01-01 0시(= 2026-12-31 24시) 시가를 입력하세요",
+                id: "V-DEM-04", severity: pending ? "warning" : "critical",
+                message: pending
+                    ? "2027-01-01 0시 시가가 아직 없습니다 — 과세 시작 후 입력하면 과세 시작 전 보유분의 취득가가 확정됩니다"
+                    : "의제 시가 누락 — 2027-01-01 0시(= 2026-12-31 24시) 시가를 입력하세요",
                 context: r.missingMarketAssets.map(\.code).joined(separator: ",")
             ))
         }

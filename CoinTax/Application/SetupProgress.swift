@@ -102,17 +102,23 @@ struct SetupProgress {
         ))
 
         // 5. 의제취득가용 시가 (2027-01-01 0시)
+        //
+        // 그 시가는 2027-01-01 이 지나야 존재한다. 그전까지 「할 일」로 띄우면 사용자는
+        // 있지도 않은 값을 찾아 헤매고 체크리스트는 영영 안 끝난다 — 차례가 아님으로 둔다.
         let needed = assetsNeedingMarketPrice(project: project, env: env)
         p.missingMarketAssets = needed
+        let beforeTaxStart = TaxTime.isBeforeTaxStart()
         p.steps.append(Step(
             id: 5,
             title: "\(TaxCopy.deemedAsOfLabel) 입력",
             detail: needed.isEmpty
                 ? "과세 시작 전 보유분의 의제취득가를 정할 수 있습니다."
-                : "\(needed.joined(separator: ", ")) 가격이 필요합니다. 과세 시작(2027-01-01) 전부터 갖고 있던 코인은 이 가격과 실제 취득가 중 **큰 쪽**을 취득가로 씁니다. \(TaxCopy.deemedAsOfDetail)",
-            state: needed.isEmpty ? .done : .needsAction,
+                : beforeTaxStart
+                    ? "2027-01-01 이 지나야 나오는 값입니다 (\(needed.joined(separator: ", "))). 그때까지는 실제 산 값으로 계산하며, 나중에 넣으면 취득가가 올라가 세금이 줄 수 있습니다."
+                    : "\(needed.joined(separator: ", ")) 가격이 필요합니다. 과세 시작(2027-01-01) 전부터 갖고 있던 코인은 이 가격과 실제 취득가 중 **큰 쪽**을 취득가로 씁니다. \(TaxCopy.deemedAsOfDetail)",
+            state: needed.isEmpty ? .done : (beforeTaxStart ? .waiting : .needsAction),
             section: .settings,
-            actionTitle: needed.isEmpty ? nil : "입력하기"
+            actionTitle: (needed.isEmpty || beforeTaxStart) ? nil : "입력하기"
         ))
 
         // 6. 계산
