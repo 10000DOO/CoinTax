@@ -51,7 +51,7 @@ struct ImportView: View {
         }
         .fileImporter(
             isPresented: $isImporterPresented,
-            allowedContentTypes: [.commaSeparatedText, .pdf, .data, .plainText, .spreadsheet],
+            allowedContentTypes: [.folder, .commaSeparatedText, .pdf, .data, .plainText, .spreadsheet],
             allowsMultipleSelection: true
         ) { handleImport($0) }
         .sheet(isPresented: $showGenericSheet) { genericSheet }
@@ -104,12 +104,12 @@ struct ImportView: View {
             Image(systemName: "arrow.down.doc")
                 .font(.system(size: 26, weight: .light))
                 .foregroundStyle(isTargeted ? AnyShapeStyle(Color.accentColor) : AnyShapeStyle(.tertiary))
-            Text(isTargeted ? "여기에 놓으세요" : "파일을 여기에 끌어다 놓으세요")
+            Text(isTargeted ? "여기에 놓으세요" : "파일이나 폴더를 여기에 끌어다 놓으세요")
                 .font(.system(size: 13, weight: .semibold))
-            Text("빗썸 거래내역 확인서 PDF · 바이낸스/OKX CSV · XLSX")
+            Text("빗썸 확인서 PDF · 바이낸스/OKX CSV · XLSX — 폴더를 넣으면 하위 파일까지 모두 찾습니다")
                 .font(Theme.caption)
                 .foregroundStyle(.secondary)
-            Button("파일 고르기…") { isImporterPresented = true }
+            Button("파일·폴더 고르기…") { isImporterPresented = true }
                 .buttonStyle(.borderedProminent)
             if let d = lastDetect { detectBadge(d) }
         }
@@ -431,7 +431,17 @@ struct ImportView: View {
         return resolved.account
     }
 
+    /// 파일이면 그대로, 폴더면 그 아래 파일을 모두 넣는다.
     private func ingest(_ url: URL) {
+        let files = ImportService.expandToImportableFiles(url)
+        guard !files.isEmpty else {
+            append("\(url.lastPathComponent): 넣을 파일이 없습니다 (csv · xlsx · pdf)", .warning)
+            return
+        }
+        for file in files { ingestFile(file) }
+    }
+
+    private func ingestFile(_ url: URL) {
         guard let project = env.currentProject else { return }
         do {
             lastDetect = env.importService.detect(url: url)
@@ -442,7 +452,13 @@ struct ImportView: View {
                 return
             }
 
+            // 열 지정·비밀번호 시트는 한 번에 하나만 뜬다. 폴더째 넣을 때 뒤 파일이 앞 파일의
+            // 대기 상태를 덮어쓰면 앞 파일이 말없이 빠지므로, 건너뛴 사실을 알린다.
             if forceGeneric || lastDetect?.topParserID == "generic-tabular-v1" {
+                guard pendingURL == nil else {
+                    append("\(name): 열을 직접 지정해야 해서 건너뛰었습니다 — 이 파일만 따로 넣어 주세요", .warning)
+                    return
+                }
                 genericHeaders = (try? env.importService.peekHeaders(url: url)) ?? []
                 guard !genericHeaders.isEmpty else {
                     append("\(name): 열 이름을 읽지 못했습니다", .danger)
@@ -454,6 +470,10 @@ struct ImportView: View {
                 return
             }
             if url.pathExtension.lowercased() == "pdf", let doc = PDFDocument(url: url), doc.isLocked {
+                guard pendingURL == nil else {
+                    append("\(name): 비밀번호를 물어봐야 해서 건너뛰었습니다 — 이 파일만 따로 넣어 주세요", .warning)
+                    return
+                }
                 pendingURL = try Self.stageCopy(of: url)
                 pendingAccountID = account.id
                 showPDFPassword = true

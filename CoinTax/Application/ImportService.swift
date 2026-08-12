@@ -25,6 +25,21 @@ final class ImportService {
         var topParserID: String?
     }
 
+    /// 폴더를 받으면 하위 폴더까지 훑어 넣을 수 있는 파일만 돌려준다. 파일이면 그대로 한 건.
+    /// 숨김 파일(.DS_Store)과 거래소 export 가 아닌 확장자는 걸러야 폴더째 넣어도 오류가 쏟아지지 않는다.
+    nonisolated static func expandToImportableFiles(_ url: URL) -> [URL] {
+        guard (try? url.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true else { return [url] }
+        let allowed: Set<String> = ["csv", "xlsx", "xls", "pdf", "txt"]
+        let found = FileManager.default.enumerator(
+            at: url,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        )?.compactMap { $0 as? URL } ?? []
+        return found
+            .filter { allowed.contains($0.pathExtension.lowercased()) }
+            .sorted { $0.path.localizedStandardCompare($1.path) == .orderedAscending }
+    }
+
     func detect(url: URL) -> DetectOutcome {
         let probe = FormatProbe.probe(url: url)
         let ranked: [(parserID: String, score: Double)] = registry.ranked(for: probe).map {
