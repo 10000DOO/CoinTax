@@ -465,16 +465,20 @@ struct CostBasisEngine {
                                 id: "V-QTY-02", severity: dust ? "warning" : "critical",
                                 message: dust
                                     ? "출금 수량이 장부보다 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code) 많습니다 (거래소 반올림 수준)"
-                                    : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — 이 계정의 거래내역이 시작되기 전 보유분이 있거나 내역 일부가 빠졌을 수 있습니다. 더 이전 기간 원본을 함께 가져오세요",
+                                    : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — ① 이자·리베이트·에어드롭처럼 거래·입출금이 아닌 방식으로 들어온 기록이 빠졌거나 ② 이 계정의 거래내역 시작 전 보유분이 있습니다. 바이낸스는 「Transaction History」, OKX는 「Funding History」를 함께 넣고, 그래도 남으면 더 이전 기간 원본을 받으세요",
                                 context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
                             ))
                         }
                         abandonedTotal += out.costKRW
                         abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW
                         warnings.append("미매칭 출금 원가 소멸: \(e.baseAsset.code) \(Money.decimalString(wQty))")
+                        // 사용자가 「잘못 보내 소멸」로 이미 판단한 건은 처리 결과가 같으므로
+                        // 「연결하세요」를 다시 재촉하지 않는다. 원가가 사라졌다는 사실만 남긴다.
                         issues.append(.init(
                             id: "V-QTY-04", severity: "warning",
-                            message: "연결되지 않은 출금의 취득원가는 소멸 처리됩니다 (세액이 커지는 방향) — 다른 거래소로 보낸 것이면 상대 입금을 연결하고, 개인지갑으로 보낸 것이면 「전송 연결」 화면에서 개인지갑으로 지정하세요 (지정하지 않으면 보유 현황에서도 빠집니다)",
+                            message: e.lostForever
+                                ? "잘못 보내 소멸로 지정한 출금입니다 — 취득원가는 사라지고 손실로 공제되지 않습니다 (세액이 커지는 방향)"
+                                : "연결되지 않은 출금의 취득원가는 소멸 처리됩니다 (세액이 커지는 방향) — 다른 거래소로 보낸 것이면 상대 입금을 연결하고, 개인지갑으로 보낸 것이면 「전송 연결」 화면에서 개인지갑으로 지정하세요 (지정하지 않으면 보유 현황에서도 빠집니다)",
                             context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp))"
                         ))
                         if !e.quantityIsNetOfFee, let fee = e.feeAmount, fee > 0 {

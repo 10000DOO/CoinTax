@@ -9,6 +9,7 @@ struct MatchingView: View {
     @State private var candidates: [TransferMatchCandidate] = []
     @State private var unmatchedWithdrawals: [LedgerEventEntity] = []
     @State private var unmatchedDeposits: [LedgerEventEntity] = []
+    @State private var lostWithdrawals: [LedgerEventEntity] = []
     @State private var manualWithdrawalID: UUID?
     @State private var manualDepositID: UUID?
     @State private var message: String?
@@ -30,6 +31,7 @@ struct MatchingView: View {
             if !candidates.isEmpty { candidatesCard }
             confirmedCard
             if !unmatchedWithdrawals.isEmpty || !unmatchedDeposits.isEmpty { unmatchedCard }
+            if !lostWithdrawals.isEmpty { lostCard }
             manualCard
         }
         .onAppear { refresh() }
@@ -153,6 +155,7 @@ struct MatchingView: View {
                         .buttonStyle(.bordered).controlSize(.small)
                 }
                 Text("**개인지갑(레저·메타마스크 등)으로 보낸 것**이면 「개인지갑으로」를 누르세요 — 산 값이 지갑까지 따라갑니다. "
+                     + "**주소·네트워크를 틀려서 날린 것**이면 「잘못 보냄」을 누르세요. "
                      + "**다른 거래소로 보낸 것**이면 그 거래소 파일을 먼저 넣으세요. "
                      + "**실제로 팔았거나 남에게 보낸 것**이면 개인지갑이 아닙니다 (양도로 신고해야 합니다).")
                     .font(Theme.caption).foregroundStyle(.secondary)
@@ -188,6 +191,32 @@ struct MatchingView: View {
         }
     }
 
+    // MARK: 잘못 보내 소멸
+
+    private var lostCard: some View {
+        Card(
+            title: "잘못 보내 사라진 것 (\(lostWithdrawals.count))",
+            systemImage: "exclamationmark.triangle",
+            footnote: "잘못 보낸 손실은 양도가 아니어서 손실로 공제되지 않습니다. 그 코인의 산 값은 사라지고 세액은 그만큼 커지는 쪽입니다 — 표시해 두면 「확인 안 한 건」과 구분됩니다."
+        ) {
+            ForEach(lostWithdrawals, id: \.id) { e in
+                HStack(spacing: Theme.gap) {
+                    Image(systemName: "xmark.octagon")
+                        .font(.system(size: 9)).foregroundStyle(Theme.danger)
+                    Text(Fmt.date(e.timestamp)).font(Theme.mono).frame(width: 84, alignment: .leading)
+                    Text(accountName(e.accountID)).font(Theme.caption).frame(width: 66, alignment: .leading)
+                    Text(e.baseAsset).font(Theme.mono).frame(width: 54, alignment: .leading)
+                    Text(Fmt.qtyString(Money.abs(Decimal(string: e.quantity) ?? 0))).font(Theme.mono)
+                    Spacer()
+                    Button("되돌리기") { unmarkLost(e) }
+                        .buttonStyle(.borderless).controlSize(.small)
+                        .foregroundStyle(.secondary)
+                }
+                .padding(.vertical, 1)
+            }
+        }
+    }
+
     private func unmatchedRow(_ e: LedgerEventEntity, outgoing: Bool) -> some View {
         HStack(spacing: Theme.gap) {
             Image(systemName: outgoing ? "arrow.up.right" : "arrow.down.left")
@@ -205,6 +234,9 @@ struct MatchingView: View {
                 Button("개인지갑으로") { moveToWallet(e) }
                     .buttonStyle(.bordered).controlSize(.small)
                     .help("거래소 밖 내 지갑으로 보낸 것으로 처리합니다. 산 값이 지갑으로 이어지고, 전송 자체는 세금이 붙지 않습니다")
+                Button("잘못 보냄") { markLost(e) }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("주소나 네트워크를 틀려서 되돌릴 수 없게 된 출금으로 표시합니다. 산 값은 사라지고 손실 공제도 안 됩니다 — 세액은 지금과 같고, 확인했다는 표시만 남습니다")
             } else if canReceiveFromWallet(e) {
                 Button("개인지갑에서") { receiveFromWallet(e) }
                     .buttonStyle(.bordered).controlSize(.small)
@@ -309,8 +341,12 @@ struct MatchingView: View {
         candidates = env.matchingService.suggest(for: project)
         let confirmedFrom = Set(project.links.filter { $0.status == LinkStatus.confirmed.rawValue }.map(\.fromEventID))
         let confirmedTo = Set(project.links.filter { $0.status == LinkStatus.confirmed.rawValue }.map(\.toEventID))
+        // 소멸로 지정한 출금은 「할 일」에서 빼고 아래 별도 목록으로 보여준다
         unmatchedWithdrawals = project.events
-            .filter { $0.type == EventType.withdrawal.rawValue && $0.baseAsset.uppercased() != "KRW" && !confirmedFrom.contains($0.id) }
+            .filter { $0.type == EventType.withdrawal.rawValue && $0.baseAsset.uppercased() != "KRW" && !confirmedFrom.contains($0.id) && !$0.lostForever }
+            .sorted { $0.timestamp > $1.timestamp }
+        lostWithdrawals = project.events
+            .filter { $0.type == EventType.withdrawal.rawValue && $0.lostForever }
             .sorted { $0.timestamp > $1.timestamp }
         unmatchedDeposits = project.events
             .filter { $0.type == EventType.deposit.rawValue && $0.baseAsset.uppercased() != "KRW" && !confirmedTo.contains($0.id) }
@@ -378,6 +414,32 @@ struct MatchingView: View {
             set("개인지갑으로 옮겼습니다 — 산 값이 이어집니다.", .positive)
         } catch let err as CoinTaxError {
             set(err.errorDescription ?? "처리하지 못했습니다", .danger)
+        } catch {
+            set(error.localizedDescription, .danger)
+        }
+    }
+
+    private func markLost(_ e: LedgerEventEntity) {
+        guard let project = env.currentProject else { return }
+        do {
+            try env.matchingService.markLost(withdrawal: e, project: project)
+            env.invalidateCalculation()
+            refresh()
+            set("잘못 보내 소멸한 것으로 표시했습니다 — 산 값은 사라지고 손실 공제는 되지 않습니다.", .warning)
+        } catch let err as CoinTaxError {
+            set(err.errorDescription ?? "처리하지 못했습니다", .danger)
+        } catch {
+            set(error.localizedDescription, .danger)
+        }
+    }
+
+    private func unmarkLost(_ e: LedgerEventEntity) {
+        guard let project = env.currentProject else { return }
+        do {
+            try env.matchingService.markLost(withdrawal: e, project: project, lost: false)
+            env.invalidateCalculation()
+            refresh()
+            set("소멸 표시를 지웠습니다 — 다시 연결 대상으로 돌아갑니다.", .neutral)
         } catch {
             set(error.localizedDescription, .danger)
         }

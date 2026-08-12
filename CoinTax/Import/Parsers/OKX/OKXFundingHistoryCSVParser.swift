@@ -50,8 +50,14 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
             }
             let mapped: (EventType, Decimal)?
             switch typeStr {
-            case "Deposit", "Received":
+            case "Deposit":
                 mapped = (.deposit, Money.abs(amount))
+            // `Received` 는 블록체인 입금이 아니라 OKX 안에서 받은 것이다 (가입·첫 입금 보상 등).
+            // 다른 거래소 출금의 상대가 될 수 없으므로 입금으로 두면 전송 연결 화면에
+            // 영영 짝이 안 맞는 후보로 남는다. 취득가 0원 처리는 income 쪽과 같고,
+            // 「취득가 0원」 안내는 V-COST-01 이 따로 내보낸다.
+            case "Received":
+                mapped = (.income, Money.abs(amount))
             case "Withdrawal":
                 mapped = (.withdrawal, -Money.abs(amount))
             case "From unified trading account":

@@ -24,7 +24,9 @@ enum EntityMappers {
     }
 
     static func event(_ e: LedgerEventEntity, projectID: ProjectID) -> LedgerEvent {
-        LedgerEvent(
+        // 인자를 하나 더 늘리면 타입 체커가 터진다 (optional map 이 많아 조합이 폭발한다).
+        // 새 필드는 생성 후 대입으로 붙인다.
+        var event = LedgerEvent(
             id: EventID(e.id),
             projectID: projectID,
             accountID: AccountID(e.accountID),
@@ -53,6 +55,8 @@ enum EntityMappers {
             balanceAfter: e.balanceAfter.flatMap { Decimal(string: $0) },
             quoteBalanceAfter: e.quoteBalanceAfter.flatMap { Decimal(string: $0) }
         )
+        event.lostForever = e.lostForever
+        return event
     }
 
     static func link(_ e: TransferLinkEntity, projectID: ProjectID) -> TransferLink {
@@ -95,6 +99,7 @@ enum EntityMappers {
         entity.rawRef = event.rawRef
         entity.needsFX = event.needsFX
         entity.quantityIsNetOfFee = event.quantityIsNetOfFee
+        entity.lostForever = event.lostForever
         entity.balanceAfter = event.balanceAfter.map { Money.decimalString($0) }
         entity.quoteBalanceAfter = event.quoteBalanceAfter.map { Money.decimalString($0) }
     }

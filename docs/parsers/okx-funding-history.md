@@ -43,7 +43,7 @@
 |------|-----------|-------------------|
 | `Deposit` | 외부→펀딩 입금 | `deposit` |
 | `Withdrawal` | 펀딩→외부 출금 | `withdrawal` |
-| `Received` | 수신(입금 계열) | `deposit` (세부 구분은 memo) |
+| `Received` | **OKX 내부 수신** (가입·첫 입금 보상 등) | `income` — 블록체인 입금이 아니라 다른 거래소 출금의 상대가 될 수 없다. `deposit` 으로 두면 전송 연결 화면에 짝 없는 후보로 영원히 남는다 |
 | `From unified trading account` | 트레이딩→펀딩 | `transferInternal` (입금 쪽) |
 | `To unified trading account` | 펀딩→트레이딩 | `transferInternal` (출금 쪽) |
 | `Fee rebate` | 수수료 리베이트 | `income` (기타; 세금 태그 분리) |
@@ -62,7 +62,7 @@ timestamp = Time + meta timezone
 
 | Type | quantity 부호 규약 |
 |------|-------------------|
-| Deposit, Received, From unified… | 보유 + |
+| Deposit, Received, From unified… | 보유 + (`Received` 는 income) |
 | Withdrawal, To unified… | 보유 − |
 | Fee rebate | + (income) |
 

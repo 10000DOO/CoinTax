@@ -112,6 +112,8 @@ final class LedgerEventEntity {
     var balanceAfter: String? = nil
     /// 같은 행에 견적자산 잔고가 함께 있으면 그 값 (OKX 거래내역의 quote leg)
     var quoteBalanceAfter: String? = nil
+    /// 잘못 보내 되돌릴 수 없게 된 출금 (사용자 지정). 선언부 기본값 필수 — 경량 마이그레이션.
+    var lostForever: Bool = false
     var project: ProjectEntity?
 
     init(id: UUID = UUID(), accountID: UUID, fingerprint: String, timestamp: Date, type: String, baseAsset: String, quantity: String, sourceKind: String) {

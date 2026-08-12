@@ -177,6 +177,8 @@ struct SetupProgress {
             $0.type == EventType.withdrawal.rawValue
                 && $0.baseAsset.uppercased() != "KRW"
                 && !linkedFrom.contains($0.id)
+                // 「잘못 보내 소멸」로 이미 판단한 건은 남은 할 일이 아니다
+                && !$0.lostForever
         }.count
     }
 }

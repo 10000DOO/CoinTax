@@ -193,6 +193,31 @@ final class MatchingService {
             }
     }
 
+    /// 잘못 보내 되돌릴 수 없게 된 출금으로 지정한다.
+    ///
+    /// 주소를 틀리게 넣거나 지원하지 않는 네트워크로 보내면 코인이 실제로 사라진다.
+    /// 개인지갑도 아니고 상대 거래소도 없으므로 연결할 대상 자체가 없다.
+    ///
+    /// - Important: 계산 결과는 「연결되지 않은 출금」과 **똑같다** — 취득원가가 소멸한다.
+    ///   현행 세법에서 잘못 보낸 손실은 양도가 아니어서 손실 공제 대상이 아니다.
+    ///   이 지정이 바꾸는 것은 세액이 아니라, 「아직 확인하지 않은 건」과 구분해 주는 것이다.
+    func markLost(withdrawal: LedgerEventEntity, project: ProjectEntity, lost: Bool = true) throws {
+        guard withdrawal.type == EventType.withdrawal.rawValue else {
+            throw CoinTaxError.parserReject("출금 거래만 소멸로 지정할 수 있습니다")
+        }
+        guard withdrawal.baseAsset.uppercased() != "KRW" else {
+            throw CoinTaxError.parserReject("원화 출금은 가상자산 전송이 아닙니다")
+        }
+        let linked = project.links.contains {
+            $0.fromEventID == withdrawal.id && $0.status == LinkStatus.confirmed.rawValue
+        }
+        guard !linked else {
+            throw CoinTaxError.parserReject("이미 다른 입금에 연결된 출금입니다 — 연결을 먼저 해제하세요")
+        }
+        withdrawal.lostForever = lost
+        try modelContext.save()
+    }
+
     /// 상대 출금이 없는 입금을 **개인지갑에서 들여온 것**으로 처리한다. `moveToWallet` 의 반대 방향.
     ///
     /// 지갑에는 거래소 같은 출금 기록이 없어서 자동 후보가 잡히지 않는다. 그대로 두면

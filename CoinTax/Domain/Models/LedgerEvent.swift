@@ -38,6 +38,11 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
     var balanceAfter: Decimal?
     /// 견적자산 잔고 (OKX 거래내역처럼 한 주문에 두 자산 잔고가 다 있는 경우)
     var quoteBalanceAfter: Decimal?
+    /// 잘못 보내 되돌릴 수 없게 된 출금인지 (사용자가 직접 확인해 지정).
+    ///
+    /// 처리 결과는 「연결되지 않은 출금」과 같다 — 취득원가가 소멸한다.
+    /// 다른 점은 **사용자가 이미 판단했다는 사실**이다. 그래서 「연결하세요」 경고를 더 내지 않는다.
+    var lostForever: Bool = false
 
     init(
         id: EventID = EventID(),
