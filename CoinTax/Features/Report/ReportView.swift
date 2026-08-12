@@ -9,6 +9,8 @@ struct ReportView: View {
     @State private var messageTone: Tone = .neutral
     @State private var busy = false
     @State private var showAllDisposals = false
+    /// 항목 목록을 펼친 검사 (검사 id + 문구)
+    @State private var expandedIssues: Set<String> = []
 
     var body: some View {
         Page(title: "세금 리포트", subtitle: isPreviewYear ? "\(taxYear)년 거래 손익 · 27년 규정 적용 시" : "\(taxYear)년 귀속 가상자산 기타소득") {
@@ -136,10 +138,17 @@ struct ReportView: View {
 
     // MARK: 검증
 
+    /// 검사 결과를 **검사별로 묶어서** 보여준다.
+    ///
+    /// 같은 검사에서 나온 것은 문구가 글자 하나까지 같다 — 실데이터에서 「취득가 0원」 하나가
+    /// 56건이다. 예전에는 앞 12건만 찍고 「외 64건」으로 끝나서 **나머지를 볼 방법이 아예
+    /// 없었다.** 그렇다고 76줄을 그대로 늘어놓으면 같은 문장이 56번 반복돼 읽을 수 없다.
+    /// 그래서 문구는 한 번만 쓰고, 어떤 항목들인지는 접었다 펼친다.
     private func verificationCard(_ c: CalculationResult) -> some View {
         let issues = c.verification.issues
         let criticals = issues.filter { $0.severity == "critical" }
         let warnings = issues.filter { $0.severity != "critical" }
+        let groups = Self.groupIssues(criticals + warnings)
         return Card(title: "검증 결과", systemImage: "checkmark.shield") {
             if issues.isEmpty {
                 HStack(spacing: 6) {
@@ -150,26 +159,82 @@ struct ReportView: View {
                 HStack(spacing: Theme.gap) {
                     if !criticals.isEmpty { Pill(text: "막힘 \(criticals.count)", tone: .danger) }
                     if !warnings.isEmpty { Pill(text: "확인 \(warnings.count)", tone: .warning) }
+                    Spacer()
+                    Text("검사 \(groups.count)종").font(Theme.caption).foregroundStyle(.secondary)
                 }
-                ForEach(Array((criticals + warnings).prefix(12).enumerated()), id: \.offset) { _, issue in
-                    HStack(alignment: .top, spacing: 8) {
-                        Circle()
-                            .fill(issue.severity == "critical" ? Theme.danger : Theme.warning)
-                            .frame(width: 6, height: 6).padding(.top, 5)
-                        VStack(alignment: .leading, spacing: 1) {
-                            Text(issue.message).font(Theme.body)
-                                .fixedSize(horizontal: false, vertical: true)
-                            if let ctx = issue.context, !ctx.isEmpty {
-                                Text(ctx).font(Theme.caption).foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
-                if issues.count > 12 {
-                    Text("외 \(issues.count - 12)건").font(Theme.caption).foregroundStyle(.secondary)
+                ForEach(Array(groups.enumerated()), id: \.element.id) { index, group in
+                    if index > 0 { Divider() }
+                    issueGroupRow(group)
                 }
             }
         }
+    }
+
+    /// 같은 검사에서 같은 문구로 나온 항목들
+    struct IssueGroup: Identifiable {
+        let id: String
+        var severity: String
+        var message: String
+        var contexts: [String]
+        var count: Int
+    }
+
+    /// 막힘 먼저, 그 안에서는 처음 나온 순서를 지킨다 (건수 순으로 흔들면 볼 때마다 자리가 바뀐다).
+    /// 같은 검사 id 라도 문구가 갈리는 경우가 있어(V-QTY-02 의 「반올림 수준」 vs 「부족」)
+    /// id 가 아니라 **id + 문구**로 묶는다.
+    static func groupIssues(_ issues: [VerificationIssue]) -> [IssueGroup] {
+        var order: [String] = []
+        var byKey: [String: IssueGroup] = [:]
+        for issue in issues {
+            let key = "\(issue.id)|\(issue.message)"
+            if byKey[key] == nil {
+                byKey[key] = IssueGroup(id: key, severity: issue.severity, message: issue.message, contexts: [], count: 0)
+                order.append(key)
+            }
+            byKey[key]?.count += 1
+            if let ctx = issue.context, !ctx.isEmpty {
+                byKey[key]?.contexts.append(ctx)
+            }
+        }
+        return order.compactMap { byKey[$0] }
+    }
+
+    /// 펼치기 전에 보여줄 항목 수
+    private static let contextPreviewLimit = 8
+
+    @ViewBuilder
+    private func issueGroupRow(_ g: IssueGroup) -> some View {
+        let expanded = expandedIssues.contains(g.id)
+        let shown = expanded ? g.contexts : Array(g.contexts.prefix(Self.contextPreviewLimit))
+        let hidden = g.contexts.count - shown.count
+        HStack(alignment: .top, spacing: 8) {
+            Circle()
+                .fill(g.severity == "critical" ? Theme.danger : Theme.warning)
+                .frame(width: 6, height: 6).padding(.top, 6)
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    Text(g.message).font(Theme.body)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if g.count > 1 {
+                        Pill(text: "\(g.count)건", tone: g.severity == "critical" ? .danger : .warning)
+                    }
+                }
+                if !shown.isEmpty {
+                    Text(shown.joined(separator: " · "))
+                        .font(Theme.mono)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                }
+                if hidden > 0 || expanded {
+                    Button(expanded ? "접기" : "\(hidden)개 더 보기") {
+                        if expanded { expandedIssues.remove(g.id) } else { expandedIssues.insert(g.id) }
+                    }
+                    .buttonStyle(.link).font(Theme.caption)
+                }
+            }
+        }
+        .padding(.vertical, 2)
     }
 
     // MARK: 자산별
