@@ -27,6 +27,11 @@ struct CostBasisEngine {
         var fxResolvedByDay: [String: FXResolvedRate] = [:]
         var deemedKeys: Set<String> = []
         var shortfallKeys: Set<String> = []
+        /// 출금은 처리했는데 아직 도착(입금 이벤트)을 지나지 않은 전송의 이전 원가.
+        /// 입금 시각에 입고하기 위해 잠시 들고 있는다.
+        var pendingArrivals: [EventID: (qty: Decimal, cost: Decimal)] = [:]
+        /// 이미 지나간 입금 이벤트. 입금이 출금보다 먼저 기록된 전송을 구분한다.
+        var seenDeposits: Set<EventID> = []
 
         // id 는 저장소에서 유일하지만, 방어적으로 첫 값을 채택한다 (중복 키로 프로세스가 죽지 않게)
         let eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
@@ -179,27 +184,21 @@ struct CostBasisEngine {
         }
 
         /// 수수료의 KRW 원가.
-        /// - 원화/USD 연동 수수료: 환산
-        /// - 그 외 자산(BNB 등): 해당 자산 장부에서 처분해 그 **장부 원가**를 부대비용으로 (IMPLEMENTATION §6.3)
+        /// - 원화 수수료: 금액 그대로
+        /// - **가상자산 수수료(USDT·BNB 등): 그 자산 장부에서 처분하고 장부 원가를 부대비용으로** (IMPLEMENTATION §6.3)
+        ///
+        /// USDT 수수료를 「환율로 환산만 하고 장부는 그대로」 두면 **수수료로 나간 USDT 가 보유에 남는다.**
+        /// 그러면 평단·의제취득가·이후 손익이 전부 어긋난다. 코인으로 낸 수수료는 종류를 가리지 않고
+        /// 실제로 지갑에서 빠지므로 반드시 장부에서 처분한다.
+        ///
+        /// 장부 원가를 부대비용으로 쓰는 것은 「수수료 자산 처분손익 인식 + 시가를 필요경비로」와 값이 같다.
+        /// (처분이익 = 시가 − 장부원가, 필요경비 = 시가 → 순효과 = −장부원가)
         func feeCostKRW(_ e: LedgerEvent, skipAsset: AssetSymbol? = nil) -> Decimal {
             guard let feeAmt = e.feeAmount, feeAmt != 0 else { return 0 }
             let amount = Money.abs(feeAmt)
             let asset = e.feeAsset ?? e.baseAsset
             if let skip = skipAsset, asset == skip { return 0 }
             if asset.isKRW { return amount }
-            if asset.isUSDTish {
-                guard let resolved = resolveFX(e.timestamp) else {
-                    missingFX.insert(TaxTime.dayKST(e.timestamp))
-                    issues.append(.init(
-                        id: "V-FX-01", severity: "critical",
-                        message: "수수료 환산용 환율이 없습니다",
-                        context: TaxTime.dayKST(e.timestamp)
-                    ))
-                    return 0
-                }
-                return amount * resolved.rate
-            }
-            // 제3자산 수수료 (예: BNB) — 그 자산 장부에서 처분
             let b = book(for: e.accountID, asset: asset)
             let out = b.disposeClamped(qty: amount)
             if out.shortfallQty > Money.qtyEpsilon {
@@ -289,6 +288,10 @@ struct CostBasisEngine {
                     } else if let conv = krwFromQuote(e, quote: quoteAmount(e), purpose: "취득가액") {
                         quoteKRW = conv.krw
                     }
+                    // 순서: 견적자산 지출 → 수수료 지출 → 기초자산 입고.
+                    // 수수료를 견적자산(USDT)으로 내면 같은 장부를 두 번 건드리므로 순서가 원가에 영향을 준다.
+                    // 실제 거래 순서(대금 먼저, 수수료 나중)를 그대로 따른다.
+                    processQuoteLeg(e, quoteKRW: quoteKRW, recordTaxDisposals: recordTaxDisposals)
                     // 환산 불가 — 원가 0으로 두고 Critical 이슈로 보고 (계산은 계속)
                     var cost = quoteKRW ?? 0
                     // base 수수료는 수량에 반영했으므로 금액에서 제외
@@ -302,7 +305,6 @@ struct CostBasisEngine {
                             context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
                         ))
                     }
-                    processQuoteLeg(e, quoteKRW: quoteKRW, recordTaxDisposals: recordTaxDisposals)
                     book(for: e.accountID, asset: e.baseAsset).acquire(qty: qty, costKRW: cost)
 
                 case .sell:
@@ -348,15 +350,17 @@ struct CostBasisEngine {
                         }
                     }
                     processQuoteLeg(e, quoteKRW: quoteKRW, recordTaxDisposals: recordTaxDisposals)
+
+                    // **수수료 처리는 과세 여부보다 앞선다.** 수수료로 나간 코인은 과세 시작 전에도
+                    // 지갑에서 실제로 빠지므로, 여기서 장부에 반영하지 않으면 2026-12-31 보유 수량이
+                    // 부풀고 의제취득가가 틀어진다 (검증기 V-QTY-01·V-DEM-01 과도 어긋난다).
+                    //
+                    // 매도 수수료가 기초자산이면 체결 수량과 **별도로** 빠진다 (매수는 받는 수량에서 차감되므로 반대다).
+                    // 원본이 이미 순액인 판본(OKX Balance Change)만 중복 차감을 피해 건너뛴다.
+                    let feeSkip: AssetSymbol? = e.quantityIsNetOfFee ? e.baseAsset : nil
+                    let fees = feeCostKRW(e, skipAsset: feeSkip)
                     guard isTaxable else { continue }
 
-                    // 수수료가 기초자산이면 매도 수량에 이미 반영된 것으로 본다.
-                    // 여기서 또 장부에서 빼면 매수 쪽 규칙(§6.3)과 어긋나고,
-                    // 검증기의 수량 재계산(V-QTY-01)과도 불일치해 정상 계산이 막힌다.
-                    let fees = feeCostKRW(e, skipAsset: e.baseAsset)
-                    if let fa = e.feeAsset, fa == e.baseAsset, let fee = e.feeAmount, fee != 0 {
-                        warnings.append("매도 수수료가 기초자산(\(fa.code))이라 필요경비에 반영하지 않았습니다 — \(TaxTime.dayKST(e.timestamp))")
-                    }
                     let pnl = proceeds - out.costKRW - fees
                     let method = accountsByID[e.accountID]?.costMethod ?? .fifo
                     disposals.append(DisposalRecord(
@@ -378,8 +382,16 @@ struct CostBasisEngine {
                     ))
 
                 case .deposit:
+                    seenDeposits.insert(e.id)
                     if linkedAsTo.contains(e.id) {
-                        // cost acquired at withdrawal processing
+                        // 확정 전송의 도착분은 **이 입금 시각에** 입고한다.
+                        // 출금 시각에 입고하면 연말을 걸치는 전송(예: 12/31 출금 → 1/2 입금)에서
+                        // 아직 도착하지 않은 자산이 2026-12-31 스냅샷에 잡혀 의제취득가가 잘못 적용된다.
+                        if let pending = pendingArrivals.removeValue(forKey: e.id) {
+                            book(for: e.accountID, asset: e.baseAsset).acquire(qty: pending.qty, costKRW: pending.cost)
+                        }
+                        // 아직 출금을 처리하지 않았다면(거래소 시계 차이로 입금이 먼저 기록된 경우)
+                        // 출금 처리 시점에 입고한다 — 그때 `seenDeposits` 로 판단한다.
                         continue
                     }
                     if e.baseAsset.isKRW { continue }
@@ -430,7 +442,12 @@ struct CostBasisEngine {
                         let year = TaxTime.calendarYearKST(e.timestamp)
                         abandonedByYear[year, default: 0] += result.abandonedCostKRW
                         extraDeductibleByYear[year, default: 0] += result.deductibleExpenseKRW
-                        book(for: dep.accountID, asset: dep.baseAsset).acquire(qty: rQty, costKRW: result.transferredCostKRW)
+                        if seenDeposits.contains(link.toEventID) {
+                            // 입금이 먼저 기록된 전송 — 지금 입고하지 않으면 원가가 사라진다
+                            book(for: dep.accountID, asset: dep.baseAsset).acquire(qty: rQty, costKRW: result.transferredCostKRW)
+                        } else {
+                            pendingArrivals[link.toEventID] = (qty: rQty, cost: result.transferredCostKRW)
+                        }
                         transferDetails.append(TransferCostDetail(
                             linkID: link.id,
                             outboundCostKRW: out.costKRW,
@@ -489,6 +506,16 @@ struct CostBasisEngine {
 
         process(pass1, recordTaxDisposals: false)
 
+        // 과세 시작 시점에 「이동 중」인 전송이 있으면 그 수량은 어느 계정 장부에도 없다.
+        // 의제취득가(2027-01-01 0시 보유분) 대상에서 빠지므로 사용자가 알아야 한다.
+        if !pendingArrivals.isEmpty {
+            issues.append(.init(
+                id: "V-DEM-05", severity: "warning",
+                message: "과세 시작 시점(2027-01-01 0시)에 도착하지 않은 전송이 \(pendingArrivals.count)건 있습니다 — 그 수량은 의제취득가 대상에서 빠집니다 (세액이 커지는 방향)",
+                context: nil
+            ))
+        }
+
         // --- 의제취득가 적용 (2026-12-31 24:00 KST 스냅샷) ---
         // 「실제 취득가 vs 시가」 비교 단위는 세무 확인 대기 항목(TQ-01)이라 두 방식을 모두 지원한다.
         //   positionAverage: 보유 전체 평균 단가와 비교 (기본 · 보수적)
@@ -510,7 +537,7 @@ struct CostBasisEngine {
                 missingMarket.insert(assetCode)
                 issues.append(.init(
                     id: "V-DEM-04", severity: "critical",
-                    message: "2026-12-31 시가가 없어 의제취득가를 확정할 수 없습니다",
+                    message: "2027-01-01 0시 시가가 없어 의제취득가를 확정할 수 없습니다",
                     context: assetCode
                 ))
             }
@@ -571,6 +598,16 @@ struct CostBasisEngine {
         }
 
         process(pass2, recordTaxDisposals: true)
+
+        // 모든 확정 링크의 입금은 계산 대상에 있어야 한다(링크 채택 단계에서 확인). 그래도 남았다면
+        // 원가가 어디에도 입고되지 않은 것이므로 조용히 넘기지 않는다.
+        if !pendingArrivals.isEmpty {
+            issues.append(.init(
+                id: "V-QTY-03", severity: "critical",
+                message: "확정 전송 \(pendingArrivals.count)건의 도착 입금이 처리되지 않아 취득원가가 입고되지 않았습니다 — 링크를 확인하세요",
+                context: nil
+            ))
+        }
 
         // --- 보유 스냅샷 (결정적 순서) ---
         var rows: [HoldingsRow] = []
@@ -671,7 +708,7 @@ enum CoinTaxError: Error, LocalizedError {
     var errorDescription: String? {
         switch self {
         case .missingFX(let d): return "환율을 입력하세요: \(d.joined(separator: ", "))"
-        case .missingMarket(let a): return "2026-12-31 시가를 입력하세요: \(a.joined(separator: ", "))"
+        case .missingMarket(let a): return "2027-01-01 0시 시가를 입력하세요: \(a.joined(separator: ", "))"
         case .negativeLot(let m): return m
         case .unconvertibleQuote(let m): return "원화 환산 근거가 없습니다: \(m)"
         case .verifyFail: return "계산 검증 실패 — 내보내기 불가"

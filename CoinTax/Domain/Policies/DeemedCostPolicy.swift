@@ -21,7 +21,7 @@ enum DeemedBasisMode: String, Codable, Sendable, CaseIterable, Identifiable {
     var detail: String {
         switch self {
         case .positionAverage:
-            return "자산별 평균 취득단가와 2026-12-31 시가 중 큰 값을 씁니다. 취득가가 더 작게 잡혀 세금이 다소 커지는 쪽입니다."
+            return "자산별 평균 취득단가와 2027-01-01 0시 시가 중 큰 값을 씁니다. 취득가가 더 작게 잡혀 세금이 다소 커지는 쪽입니다."
         case .perLot:
             return "매입 건마다 그 단가와 시가 중 큰 값을 씁니다. 취득가가 더 크게 잡혀 세금이 줄어들 수 있습니다. 이동평균 계정(빗썸)은 매입 건 구분이 없어 평균 방식으로 동작합니다."
         }

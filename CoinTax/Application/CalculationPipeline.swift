@@ -137,20 +137,31 @@ final class CalculationPipeline {
         // 자동 조회 후에도 못 채운 환율 날짜는 별도 이슈로 남긴다 (설정에서 자동을 끈 경우 포함)
         var extraIssues: [VerificationIssue] = []
         if !stillMissing.isEmpty {
+            let message: String
+            if FXKeychain.loadECOSKey() == nil {
+                message = "환율을 채우지 못한 날짜가 있습니다 — 설정에서 한국은행 ECOS 인증키를 등록하거나 수동 입력/CSV로 채우세요"
+            } else if !fxSvc.lastRemoteFilledECOS {
+                // 키를 넣었는데 한 건도 못 받았다 → 키가 거부됐거나 네트워크가 막혔다.
+                // 「수동으로 넣으세요」라고만 하면 사용자는 키가 잘못됐다는 걸 영영 모른다.
+                message = "한국은행에서 환율을 한 건도 받지 못했습니다 — 인증키가 유효한지, 네트워크가 열려 있는지 확인하세요 (설정에서 「연결 확인」)"
+            } else {
+                message = "환율을 채우지 못한 날짜가 있습니다 — 설정에서 수동 입력 또는 CSV import 하세요"
+            }
             extraIssues.append(.init(
                 id: "V-FX-01", severity: "critical",
-                message: FXKeychain.loadECOSKey() == nil
-                    ? "환율을 채우지 못한 날짜가 있습니다 — 설정에서 한국은행 ECOS 인증키를 등록하거나 수동 입력/CSV로 채우세요"
-                    : "환율을 채우지 못한 날짜가 있습니다 — 설정에서 수동 입력 또는 CSV import 하세요",
+                message: message,
                 context: stillMissing.joined(separator: ",")
             ))
         }
         // TQ-05: 공개 시세는 외국환거래법상 기준환율이 아니다 → 섞였으면 반드시 드러낸다.
         // **실제 계산에 쓰인 고시일만** 본다. 저장돼 있어도 쓰이지 않은 날짜까지 경고하면
         // 정상 계산이 `draft` 로 내려가 오탐이 된다.
+        // 출처 태그는 **정확히** 비교한다. `contains("public")` 로 보면 예전의
+        // `remote-ecos-or-public` 같은 복합 태그가 걸려, 한국은행으로 정상 조회한 날짜까지
+        // 「참고 시세」로 잘못 표시되고 계산이 `검증 완료` 로 올라가지 못한다.
         let usedFXDays = Set(replay.fxResolutions.map(\.sourceDate))
         let publicDays = project.fxRates
-            .filter { $0.source.contains("public") && usedFXDays.contains($0.day) }
+            .filter { $0.source == "remote-public" && usedFXDays.contains($0.day) }
             .map(\.day).sorted()
         if !publicDays.isEmpty {
             extraIssues.append(.init(

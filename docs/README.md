@@ -36,6 +36,13 @@
 | [05-decisions.md](./05-decisions.md) | 확정 결정 |
 | [06-integrity.md](./06-integrity.md) | 검증 불변식 |
 
+### A-2. 감사 기록 (실데이터로 확인한 결함과 수정)
+
+| 문서 | 범위 |
+|------|------|
+| [realdata-audit-2026-08-12.md](./realdata-audit-2026-08-12.md) | 1차 — 파서(CRLF·BOM·타임존·PDF 좌표)·코인↔코인 견적 leg |
+| [audit-2026-08-12-logic.md](./audit-2026-08-12-logic.md) | 2차 — 코인 수수료 장부 반영·전송 도착 시각·검증기 오탐·**거래소 자동 구분** |
+
 ### B. 설계 (큰 틀 → 세부)
 
 **→ [design/README.md](./design/README.md)** (v2.0)

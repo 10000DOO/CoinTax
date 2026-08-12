@@ -167,8 +167,12 @@ final class FixSafetyTests: XCTestCase {
             report.issues.contains { $0.id == "V-QTY-01" },
             "엔진과 검증기가 같은 규칙을 써야 한다 — 거짓 실패 금지"
         )
+        // 매도 수수료가 기초자산이면 체결 수량과 **별도로** 빠진다 (매수는 받는 수량에서 차감된다)
         let row = try XCTUnwrap(replay.holdings.rows.first { $0.asset.code == "BTC" })
-        XCTAssertEqual(row.quantity, Decimal(string: "0.5")!)
+        XCTAssertEqual(row.quantity, Decimal(string: "0.499")!, "1 − 0.5(매도) − 0.001(수수료)")
+        // 그 수수료의 장부 원가가 필요경비로 잡혀야 한다 (0.001 BTC × 1억/BTC)
+        let disposal = try XCTUnwrap(replay.disposals.first { $0.asset.code == "BTC" })
+        XCTAssertEqual(disposal.feesKRW, 100_000)
     }
 
     // MARK: 과거(2026년) 제3자산 수수료가 의제 검사에 거짓 실패를 내지 않아야 한다

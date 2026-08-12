@@ -13,6 +13,16 @@ enum TaxCopy {
     static let costMethods =
         "빗썸 계정은 이동평균법, 바이낸스·OKX 계정은 선입선출법으로 취득가액을 계산합니다."
 
+    // MARK: - 의제취득가 기준시점 표기 (한 곳에서만 정의)
+    //
+    // 소득세법 시행령 제88조제2항의 기준 시점은 **2027-01-01 0시**다.
+    // 「2026-12-31 시가」라고만 적으면 사용자가 12월 31일 **종가**를 넣기 쉬운데,
+    // 그건 법령이 말하는 값이 아니다. 두 표기가 같은 순간임을 함께 보여준다.
+    // (저장 키 `asOf`는 `2026-12-31` 그대로 둔다 — 같은 시점이고, 바꾸면 기존 데이터가 끊긴다)
+    static let deemedAsOfLabel = "2027-01-01 0시 시가"
+    static let deemedAsOfDetail =
+        "기준 시점은 2027-01-01 0시(= 2026-12-31 24시)입니다. 12월 31일 종가가 아니라 그 시점 공시가격입니다."
+
     /// 잠금된 필수 고지 4종 (`PolicyBundle.v1Default.disclaimers`). 순서·문구 변경 시 policy id 를 올린다.
     static var all: [String] {
         [notTaxAdvice, transferCost, usdtPeg, costMethods]

@@ -92,7 +92,7 @@ enum ReportPDFExporter {
 
         if !s.deemed.isEmpty {
             let modeLabel = DeemedBasisMode(rawValue: s.deemedBasisMode)?.label ?? s.deemedBasisMode
-            lines.append("의제취득가 (2026-12-31 기준 · \(modeLabel))")
+            lines.append("의제취득가 (2027-01-01 0시 기준 · \(modeLabel))")
             for d in s.deemed {
                 let market = d.marketUnitKRW.map { krw($0) } ?? "-"
                 lines.append("  \(d.asset.code) qty=\(Money.decimalString(d.quantity)) 장부=\(krw(d.bookUnitKRW)) 시가=\(market) 채택=\(krw(d.deemedUnitKRW)) (\(d.reason))")

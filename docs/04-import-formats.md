@@ -213,6 +213,28 @@ struct ParseResult {
 
 ~~`ExchangeCSVParser`~~ → **`ExchangeDocumentParser`** (이름 변경).
 
+### 계정 자동 배정 (`ImportRouter`)
+
+여러 거래소 파일을 한 번에 넣어도 **파일마다 계정을 따로 정한다.** 사용자가 계정을 하나 고르게 두면
+빗썸 파일이 해외 계정으로 들어가 **원가법이 뒤바뀌고**(이동평균↔선입선출),
+거래소 간 전송이 같은 계정 안 이동이 되어 **매칭에서 빠지고 취득원가가 소멸한다**
+([audit-2026-08-12-logic.md](./audit-2026-08-12-logic.md) A-06).
+
+```text
+FormatProbe → ParserRegistry.bestPreset(제네릭 제외) → parserID → ExchangeCode
+  score ≥ 0.6  → 그 거래소 계정 (없으면 생성)
+  그 미만·제네릭·미인식 → nil → 사용자에게 묻는다 (조용히 아무 계정에나 넣지 않는다)
+```
+
+| Parser ID | 계정 |
+|-----------|------|
+| `bithumb-certificate-pdf-v1` | 빗썸 (이동평균법) |
+| `binance-*` | 바이낸스 (선입선출법) |
+| `okx-*` | OKX (선입선출법) |
+| `generic-tabular-v1` | **자동 배정 없음** |
+
+한계: 같은 거래소의 부계정 여러 개는 v1 범위 밖 — 거래소당 계정 하나로 합쳐진다.
+
 ---
 
 ## 6. Import 파이프라인

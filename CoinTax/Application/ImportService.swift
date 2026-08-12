@@ -33,6 +33,22 @@ final class ImportService {
         return DetectOutcome(probe: probe, ranked: ranked, topParserID: ranked.first?.parserID)
     }
 
+    /// 파일 하나가 어느 거래소 것인지 판단한다 (계정 자동 배정용).
+    func route(url: URL) -> ImportRouter.Route {
+        ImportRouter.route(FormatProbe.probe(url: url), registry: registry)
+    }
+
+    /// 파일 내용으로 거래소를 판단해 **그 거래소 계정**을 돌려준다. 없으면 만든다.
+    ///
+    /// 판단이 서지 않으면(제네릭·미인식) `nil` — 호출부가 사용자에게 묻는다.
+    /// 여기서 임의의 계정을 고르면 원가법이 뒤바뀌고 거래소 간 전송이 통째로 사라진다.
+    func resolveAccount(url: URL, project: ProjectEntity) throws -> (account: AccountEntity, route: ImportRouter.Route)? {
+        let route = route(url: url)
+        guard route.isConfident, let code = route.exchange else { return nil }
+        let account = try ProjectService(modelContext: modelContext).ensureAccount(code, in: project)
+        return (account, route)
+    }
+
     func importFile(
         url: URL,
         project: ProjectEntity,

@@ -2,6 +2,24 @@ import Foundation
 
 protocol FXClient: Sendable {
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal]
+
+    /// 이 클라이언트가 채운 값의 출처 태그.
+    ///
+    /// 리포트는 「외국환거래법상 기준환율(한국은행)」과 「참고 시세(공개 API)」를 구분해야 한다(TQ-05).
+    /// **날짜별로** 알아야 한다 — 한 번의 조회에서 일부는 ECOS, 일부는 폴백일 수 있다.
+    var sourceTag: String { get }
+
+    /// 환율과 **날짜별 출처**를 함께 돌려준다.
+    func fetchWithSources(days: [String]) async throws -> (rates: [String: Decimal], sources: [String: String])
+}
+
+extension FXClient {
+    var sourceTag: String { "remote" }
+
+    func fetchWithSources(days: [String]) async throws -> (rates: [String: Decimal], sources: [String: String]) {
+        let rates = try await fetchUSD_KRW(days: days)
+        return (rates, rates.mapValues { _ in sourceTag })
+    }
 }
 
 /// 테스트용 빈 클라이언트.

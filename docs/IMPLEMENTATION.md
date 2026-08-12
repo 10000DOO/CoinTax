@@ -157,15 +157,21 @@ SwiftUI Features
 ### 6.3 매수 취득원가 KRW
 
 - 빗썸: **`abs(정산금액)`** (수수료 포함 유출 — 총액 기준과 동일 효과)  
-- 해외 buy: `abs(quantity) × price × USDT→KRW` + 수수료 KRW 환산  
-  - Fee Coin == base: 취득 수량 순액 감소 또는 원가에 가산 (v1: **수량 순취득 = amount − fee_in_base**, 원가 = quote 지출 전액 KRW)  
-  - Fee Coin == BNB 등: BNB 장부에서 dispose 후 그 원가를 취득 부대비용에 가산; BNB 없으면 quote 환산 근사 + warning  
+- 해외 buy: `abs(quantity) × price × USDT→KRW` + 수수료 원가  
+  - Fee Coin == base: 취득 수량 순액 감소 (v1: **수량 순취득 = amount − fee_in_base**, 원가 = quote 지출 전액 KRW)  
+  - **Fee Coin == 그 밖의 코인 (USDT·BNB 등): 그 자산 장부에서 dispose 후 장부 원가를 부대비용에 가산.**
+    USDT 라고 환율로 금액만 환산하면 수수료로 나간 USDT 가 보유에 남아 평단·의제취득가가 어긋난다
+    ([audit-2026-08-12-logic.md](./audit-2026-08-12-logic.md) A-02). 장부가 비면 warning 후 0.
+  - 수수료 반영은 **과세 여부보다 앞선다** — 2027 이전 거래의 수수료도 지갑에서 실제로 나간다 (A-01).
+  - 순서: 견적자산 지출 → 수수료 지출 → 기초자산 입고 (같은 장부를 두 번 건드리므로 FIFO 결과가 달라진다)
 
 ### 6.4 매도 양도가 KRW
 
 - 빗썸: **거래금액**(총액)을 양도가액으로, `거래금액 − 정산금액` 을 수수료로 분리 (해외와 기준 통일).
   거래금액 칸이 비면 정산금액으로 폴백 — 소득금액은 동일  
 - 해외 sell: `abs(qty)×price×FX − feeKRW`  
+- 매도 수수료가 **기초자산**이면 체결 수량과 별도로 장부에서 처분한다 (매수는 받는 수량에서 차감 — 방향이 반대).
+  원본이 이미 순액인 판본(`quantityIsNetOfFee`)만 예외 (A-03).  
 
 ### 6.5 반올림 (잠금)
 

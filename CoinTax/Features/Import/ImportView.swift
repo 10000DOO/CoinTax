@@ -15,6 +15,11 @@ struct ImportView: View {
     @State private var lastErrors: [String] = []
     @State private var forceGeneric = false
     @State private var pendingURL: URL?
+    /// 시트(제네릭 매핑·PDF 비밀번호)를 거쳐 돌아왔을 때 넣을 계정.
+    /// 자동 구분이면 파일마다 다를 수 있으므로 화면 선택값을 다시 읽으면 안 된다.
+    @State private var pendingAccountID: UUID?
+    @State private var batchLines: [String] = []
+    @State private var batchTone: Tone = .neutral
     @State private var genericHeaders: [String] = []
     @State private var showGenericSheet = false
     @State private var pdfPassword = ""
@@ -51,9 +56,8 @@ struct ImportView: View {
         ) { handleImport($0) }
         .sheet(isPresented: $showGenericSheet) { genericSheet }
         .sheet(isPresented: $showPDFPassword) { passwordSheet }
-        .onAppear {
-            if selectedAccountID == nil { selectedAccountID = env.currentProject?.accounts.first?.id }
-        }
+        // 기본값은 「자동으로 구분」(nil). 계정을 미리 골라 두면 여러 거래소 파일이
+        // 한 계정으로 몰려 원가법이 뒤바뀌고 거래소 간 전송이 사라진다.
     }
 
     // MARK: 넣는 곳
@@ -61,15 +65,17 @@ struct ImportView: View {
     private var dropCard: some View {
         Card {
             HStack(spacing: Theme.gap) {
-                Text("어느 거래소 자료인가요?")
+                Text("거래소 구분")
                     .font(Theme.body)
                 Picker("", selection: $selectedAccountID) {
+                    Text("자동으로 구분").tag(UUID?.none)
                     ForEach(env.currentProject?.accounts.sorted { $0.displayName < $1.displayName } ?? [], id: \.id) { acc in
                         Text(acc.displayName).tag(Optional(acc.id))
                     }
                 }
                 .labelsHidden()
                 .frame(width: 160)
+                .help("자동으로 구분하면 파일 내용을 보고 빗썸·바이낸스·OKX 계정에 알아서 나눠 담습니다")
                 Spacer()
                 Toggle("직접 열 지정", isOn: $forceGeneric)
                     .toggleStyle(.checkbox)
@@ -77,9 +83,16 @@ struct ImportView: View {
                     .font(Theme.caption)
             }
 
+            if selectedAccountID == nil {
+                Text("여러 거래소 파일을 한꺼번에 넣어도 됩니다 — 파일 내용을 보고 거래소를 구분해 각 계정으로 나눠 담습니다.")
+                    .font(Theme.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             dropZone
 
-            if let account = selectedAccount, account.exchangeCode == ExchangeCode.binance.rawValue {
+            if selectedAccountID == nil || selectedAccount?.exchangeCode == ExchangeCode.binance.rawValue {
                 binanceChecklist
             }
         }
@@ -97,7 +110,6 @@ struct ImportView: View {
                 .foregroundStyle(.secondary)
             Button("파일 고르기…") { isImporterPresented = true }
                 .buttonStyle(.borderedProminent)
-                .disabled(selectedAccountID == nil)
             if let d = lastDetect { detectBadge(d) }
         }
         .frame(maxWidth: .infinity)
@@ -315,16 +327,18 @@ struct ImportView: View {
             onConfirm: { map, tz in
                 showGenericSheet = false
                 genericTimeZone = tz
-                if let url = pendingURL {
-                    runImport(url: url, forceGeneric: true, columnMap: map, timeZone: tz)
+                if let url = pendingURL, let accID = pendingAccountID {
+                    runImport(url: url, accountID: accID, forceGeneric: true, columnMap: map, timeZone: tz)
                     Self.discard(url)
                 }
                 pendingURL = nil
+                pendingAccountID = nil
             },
             onCancel: {
                 showGenericSheet = false
                 if let url = pendingURL { Self.discard(url) }
                 pendingURL = nil
+                pendingAccountID = nil
             }
         )
     }
@@ -344,15 +358,17 @@ struct ImportView: View {
                     pdfPassword = ""
                     if let url = pendingURL { Self.discard(url) }
                     pendingURL = nil
+                    pendingAccountID = nil
                 }
                 Button("열기") {
                     showPDFPassword = false
-                    if let url = pendingURL {
-                        runImport(url: url, forceGeneric: false, columnMap: [:], pdfPassword: pdfPassword)
+                    if let url = pendingURL, let accID = pendingAccountID {
+                        runImport(url: url, accountID: accID, forceGeneric: false, columnMap: [:], pdfPassword: pdfPassword)
                         Self.discard(url)
                     }
                     pdfPassword = ""
                     pendingURL = nil
+                    pendingAccountID = nil
                 }
                 .buttonStyle(.borderedProminent)
             }
@@ -364,10 +380,7 @@ struct ImportView: View {
     // MARK: 동작
 
     private func handleDrop(_ providers: [NSItemProvider]) {
-        guard selectedAccountID != nil else {
-            set("먼저 어느 거래소 자료인지 골라 주세요.", .warning)
-            return
-        }
+        startBatch()
         for provider in providers {
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
@@ -377,7 +390,7 @@ struct ImportView: View {
     }
 
     private func handleImport(_ result: Result<[URL], Error>) {
-        guard selectedAccountID != nil else { return }
+        startBatch()
         do {
             for url in try result.get() {
                 let access = url.startAccessingSecurityScopedResource()
@@ -385,74 +398,110 @@ struct ImportView: View {
                 ingest(url)
             }
         } catch {
-            set("파일을 열지 못했습니다 — \(error.localizedDescription)", .danger)
+            append("파일을 열지 못했습니다 — \(error.localizedDescription)", .danger)
         }
     }
 
+    /// 한 번에 여러 파일을 넣으므로 결과를 파일별로 쌓는다.
+    /// 마지막 파일 결과만 남기면 「어느 파일이 어디로 들어갔는지」를 알 수 없다.
+    private func startBatch() {
+        batchLines = []
+        batchTone = .neutral
+        lastWarnings = []
+        lastErrors = []
+        lastPreview = []
+    }
+
+    /// 이 파일을 넣을 계정. 자동 구분이면 파일 내용으로 정하고, 없으면 계정을 만든다.
+    private func resolvedAccount(for url: URL, project: ProjectEntity) throws -> AccountEntity? {
+        if let accID = selectedAccountID {
+            return project.accounts.first { $0.id == accID }
+        }
+        guard let resolved = try env.importService.resolveAccount(url: url, project: project) else {
+            return nil
+        }
+        return resolved.account
+    }
+
     private func ingest(_ url: URL) {
+        guard let project = env.currentProject else { return }
         do {
             lastDetect = env.importService.detect(url: url)
+            let name = url.lastPathComponent
+
+            guard let account = try resolvedAccount(for: url, project: project) else {
+                append("\(name): 어느 거래소 자료인지 알 수 없습니다 — 위에서 거래소를 직접 고른 뒤 다시 넣어 주세요", .warning)
+                return
+            }
 
             if forceGeneric || lastDetect?.topParserID == "generic-tabular-v1" {
                 genericHeaders = (try? env.importService.peekHeaders(url: url)) ?? []
                 guard !genericHeaders.isEmpty else {
-                    set("이 파일의 열 이름을 읽지 못했습니다.", .danger)
+                    append("\(name): 열 이름을 읽지 못했습니다", .danger)
                     return
                 }
                 pendingURL = try Self.stageCopy(of: url)
+                pendingAccountID = account.id
                 showGenericSheet = true
                 return
             }
             if url.pathExtension.lowercased() == "pdf", let doc = PDFDocument(url: url), doc.isLocked {
                 pendingURL = try Self.stageCopy(of: url)
+                pendingAccountID = account.id
                 showPDFPassword = true
                 return
             }
             let tmp = try Self.stageCopy(of: url)
             defer { Self.discard(tmp) }
-            runImport(url: tmp, forceGeneric: false, columnMap: [:])
+            runImport(url: tmp, accountID: account.id, forceGeneric: false, columnMap: [:])
         } catch {
-            set("가져오지 못했습니다 — \(error.localizedDescription)", .danger)
-            lastErrors = [error.localizedDescription]
+            append("\(url.lastPathComponent): 가져오지 못했습니다 — \(error.localizedDescription)", .danger)
+            lastErrors.append(error.localizedDescription)
         }
     }
 
     private func runImport(
-        url: URL, forceGeneric: Bool, columnMap: [String: String],
+        url: URL, accountID: UUID, forceGeneric: Bool, columnMap: [String: String],
         timeZone: String = "UTC", pdfPassword: String? = nil
     ) {
         guard let project = env.currentProject,
-              let accID = selectedAccountID,
-              let account = project.accounts.first(where: { $0.id == accID }) else { return }
+              let account = project.accounts.first(where: { $0.id == accountID }) else { return }
         do {
             let outcome = try env.importService.importFile(
                 url: url, project: project, account: account,
                 forceParserID: forceGeneric ? "generic-tabular-v1" : nil,
                 genericColumnMap: columnMap, genericTimeZone: timeZone, pdfPassword: pdfPassword
             )
-            lastWarnings = outcome.parseResult.warnings
-            lastErrors = outcome.parseResult.errors
-            lastPreview = project.events
+            lastWarnings.append(contentsOf: outcome.parseResult.warnings)
+            lastErrors.append(contentsOf: outcome.parseResult.errors)
+            lastPreview.append(contentsOf: project.events
                 .filter { $0.sourceFileID == outcome.sourceFileID }
-                .sorted { $0.timestamp > $1.timestamp }
+                .sorted { $0.timestamp > $1.timestamp })
             if outcome.inserted > 0 { env.invalidateCalculation() }
 
-            var parts = ["\(outcome.inserted)건 들어왔습니다"]
+            var parts = ["\(account.displayName) ← \(outcome.inserted)건"]
             if outcome.skippedDupe > 0 { parts.append("이미 있던 \(outcome.skippedDupe)건은 건너뜀") }
             if outcome.parseResult.ignoredCount > 0 { parts.append("대상 아닌 \(outcome.parseResult.ignoredCount)건 제외") }
-            set(parts.joined(separator: " · "), outcome.inserted > 0 ? .positive : .neutral)
+            append(parts.joined(separator: " · "), outcome.inserted > 0 ? .positive : .neutral)
         } catch let e as CoinTaxError {
-            set(e.errorDescription ?? "가져오지 못했습니다", .danger)
-            lastErrors = [e.errorDescription ?? ""]
+            append("\(account.displayName): \(e.errorDescription ?? "가져오지 못했습니다")", .danger)
+            lastErrors.append(e.errorDescription ?? "")
         } catch {
-            set("가져오지 못했습니다 — \(error.localizedDescription)", .danger)
-            lastErrors = [error.localizedDescription]
+            append("\(account.displayName): 가져오지 못했습니다 — \(error.localizedDescription)", .danger)
+            lastErrors.append(error.localizedDescription)
         }
     }
 
-    private func set(_ text: String, _ tone: Tone) {
-        message = text
-        messageTone = tone
+    /// 파일 한 건의 결과를 배너에 덧붙인다. 배너 색은 가장 나쁜 결과를 따른다.
+    private func append(_ text: String, _ tone: Tone) {
+        batchLines.append(text)
+        if tone == .danger || (tone == .warning && batchTone != .danger) {
+            batchTone = tone
+        } else if batchTone == .neutral {
+            batchTone = tone
+        }
+        message = batchLines.joined(separator: "\n")
+        messageTone = batchTone
     }
 
     // MARK: - 임시 사본 관리

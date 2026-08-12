@@ -235,18 +235,19 @@ final class GapHuntTests: XCTestCase {
         XCTAssertEqual(pos.lotCount, 2)
     }
 
-    // MARK: G7 — 원화 금액이 있는 매수라도 수수료가 USDT 면 환율이 필요하다
+    // MARK: G7 — 코인으로 낸 수수료는 환율을 요구하지 않는다 (장부 원가를 쓴다)
 
     @MainActor
-    func testFeeOnlyFXNeedIsDetected() throws {
+    func testCryptoFeeDoesNotRequireFX() throws {
         let container = try CoinTaxModelContainer.make(inMemory: true)
         let ctx = ModelContext(container)
         let project = ProjectEntity(name: "fee-fx", defaultTaxYear: 2027)
         ctx.insert(project)
         let fx = FXService(modelContext: ctx, remoteClient: RemoteFXClientStub())
         let acc = Account.defaults(for: .binance, projectID: ProjectID(project.id))
-        // 원화 금액이 이미 있으므로 「양도가액 환산」에는 환율이 필요 없다.
-        // 그런데 수수료가 USDT 라 엔진은 환율을 요구한다 → 누락일 목록에 나와야 한다.
+        // 원화 금액이 이미 있고, 수수료는 USDT 다.
+        // 엔진은 USDT 수수료를 **USDT 장부에서 처분**해 장부 원가를 부대비용으로 쓰므로 환율이 필요 없다.
+        // 여기서 환율을 요구하면 쓰지도 않는 날짜 때문에 계산이 막힌다.
         let buy = LedgerEvent(
             projectID: ProjectID(project.id), accountID: acc.id,
             timestamp: TaxTime.dateKST(year: 2027, month: 6, day: 1),
@@ -255,9 +256,41 @@ final class GapHuntTests: XCTestCase {
             feeAmount: 10, feeAsset: AssetSymbol("USDT"),
             sourceKind: "t", rawRef: "r1"
         )
-        let missing = fx.missingDays(for: [buy], project: project)
-        XCTAssertEqual(missing, [TaxTime.dayKST(buy.timestamp)],
-                       "수수료 환산에 필요한 날짜도 채워야 한다")
+        XCTAssertEqual(fx.missingDays(for: [buy], project: project), [])
+
+        let engine = CostBasisEngine(
+            policies: .v1Default, accountsByID: [acc.id: acc], fxRates: [:], marketPrices: [:]
+        )
+        let replay = try engine.replay(events: [buy], links: [])
+        XCTAssertFalse(replay.issues.contains { $0.id == "V-FX-01" }, "수수료 때문에 환율 Critical 이 나면 안 된다")
+    }
+
+    // MARK: G8 — USDT 수수료가 USDT 장부에서 실제로 빠져야 한다
+
+    func testUSDTFeeReducesUSDTBook() throws {
+        let acc = Account.defaults(for: .binance, projectID: projectID)
+        let usdtIn = LedgerEvent(
+            projectID: projectID, accountID: acc.id,
+            timestamp: TaxTime.dateKST(year: 2027, month: 1, day: 2),
+            type: .buy, baseAsset: AssetSymbol("USDT"), quoteAsset: AssetSymbol("KRW"),
+            quantity: 1_000, quoteAmountKRW: 1_400_000, sourceKind: "t", rawRef: "r0"
+        )
+        // USDT 로 BTC 를 사면서 수수료도 USDT 로 냈다 → 대금 500 + 수수료 0.5 = 500.5 가 빠져야 한다
+        let buy = LedgerEvent(
+            projectID: projectID, accountID: acc.id,
+            timestamp: TaxTime.dateKST(year: 2027, month: 2, day: 1),
+            type: .buy, baseAsset: AssetSymbol("BTC"), quoteAsset: AssetSymbol("USDT"),
+            quantity: Decimal(string: "0.005")!, quoteAmount: 500,
+            feeAmount: Decimal(string: "0.5")!, feeAsset: AssetSymbol("USDT"),
+            sourceKind: "t", rawRef: "r1"
+        )
+        let engine = CostBasisEngine(
+            policies: .v1Default, accountsByID: [acc.id: acc],
+            fxRates: [TaxTime.dayKST(buy.timestamp): 1_400], marketPrices: [:]
+        )
+        let replay = try engine.replay(events: [usdtIn, buy], links: [])
+        let usdt = try XCTUnwrap(replay.holdings.rows.first { $0.asset.code == "USDT" })
+        XCTAssertEqual(usdt.quantity, Decimal(string: "499.5")!, "1000 − 500(대금) − 0.5(수수료)")
     }
 }
 

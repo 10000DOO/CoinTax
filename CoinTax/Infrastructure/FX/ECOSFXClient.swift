@@ -7,6 +7,9 @@ struct ECOSFXClient: FXClient {
     var apiKey: String
     var session: URLSession = .shared
 
+    /// 한국은행 고시 = 외국환거래법상 기준환율. 리포트에서 「참고 시세」와 반드시 구분된다.
+    let sourceTag = "remote-ecos"
+
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal] {
         let key = apiKey.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !key.isEmpty else { return [:] }
@@ -79,6 +82,8 @@ struct PublicUSDKRWClient: FXClient {
     /// 한 번의 자동 채우기에서 보낼 최대 요청 수 (요청 폭주 방지 — 리뷰 6-3)
     var maxRequests: Int = 90
 
+    let sourceTag = "remote-public"
+
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal] {
         var out: [String: Decimal] = [:]
         // 병렬 제한: 순차 (rate limit 완화)
@@ -146,26 +151,41 @@ struct CompositeFXClient: FXClient {
     var onOutcome: (@Sendable (Outcome) -> Void)? = nil
 
     func fetchUSD_KRW(days: [String]) async throws -> [String: Decimal] {
+        try await fetchWithSources(days: days).rates
+    }
+
+    /// 날짜마다 **어느 원천으로 채웠는지** 따로 기록한다.
+    ///
+    /// 한 덩어리로 `remote-ecos-or-public` 같은 태그를 붙이면, ECOS 로 다 채운 날짜까지
+    /// 「참고 시세 사용」 경고에 걸려 정상 계산이 `검증 완료` 로 올라가지 못한다.
+    func fetchWithSources(days: [String]) async throws -> (rates: [String: Decimal], sources: [String: String]) {
         var result: [String: Decimal] = [:]
+        var sources: [String: String] = [:]
         let key = ecosKeyProvider()
         let hasKey = (key?.isEmpty == false)
 
         if hasKey, let key {
-            let ecos = try await ECOSFXClient(apiKey: key).fetchUSD_KRW(days: days)
-            for (k, v) in ecos { result[k] = v }
-            onOutcome?(ecos.isEmpty ? .keyRejected : .ok)
+            let ecos = ECOSFXClient(apiKey: key)
+            let fetched = try await ecos.fetchUSD_KRW(days: days)
+            for (k, v) in fetched {
+                result[k] = v
+                sources[k] = ecos.sourceTag
+            }
+            onOutcome?(fetched.isEmpty ? .keyRejected : .ok)
         } else {
             onOutcome?(.noKey)
         }
 
         let missing = days.filter { result[$0] == nil }
-        guard !missing.isEmpty, allowPublicFallback() else { return result }
+        guard !missing.isEmpty, allowPublicFallback() else { return (result, sources) }
 
-        let pub = try await PublicUSDKRWClient().fetchUSD_KRW(days: missing)
+        let fallback = PublicUSDKRWClient()
+        let pub = try await fallback.fetchUSD_KRW(days: missing)
         for (k, v) in pub where result[k] == nil {
             result[k] = v
+            sources[k] = fallback.sourceTag
         }
         if !pub.isEmpty { onOutcome?(.publicFallbackUsed) }
-        return result
+        return (result, sources)
     }
 }

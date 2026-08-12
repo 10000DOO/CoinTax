@@ -28,6 +28,8 @@ struct SetupProgress {
     /// 지금 손대야 할 첫 단계
     var nextStep: Step? { steps.first { $0.state == .needsAction } ?? steps.first { $0.state == .waiting } }
 
+    /// 시가 저장 키 (`MarketPriceEntity.asOf`). 표시 문구는 `TaxCopy.deemedAsOfLabel` 을 쓴다 —
+    /// 법령 기준 시점은 2027-01-01 0시이고 이 키와 같은 순간이다.
     static let deemedAsOf = "2026-12-31"
 
     static func evaluate(env: AppEnvironment) -> SetupProgress {
@@ -97,15 +99,15 @@ struct SetupProgress {
             actionTitle: p.missingFXDays.isEmpty ? nil : "설정 열기"
         ))
 
-        // 5. 2026-12-31 시가
+        // 5. 의제취득가용 시가 (2027-01-01 0시)
         let needed = assetsNeedingMarketPrice(project: project, env: env)
         p.missingMarketAssets = needed
         p.steps.append(Step(
             id: 5,
-            title: "\(deemedAsOf) 시가 입력",
+            title: "\(TaxCopy.deemedAsOfLabel) 입력",
             detail: needed.isEmpty
                 ? "과세 시작 전 보유분의 의제취득가를 정할 수 있습니다."
-                : "\(needed.joined(separator: ", ")) 가격이 필요합니다. 과세 시작(2027-01-01) 전부터 갖고 있던 코인은 이 가격과 실제 취득가 중 **큰 쪽**을 취득가로 씁니다.",
+                : "\(needed.joined(separator: ", ")) 가격이 필요합니다. 과세 시작(2027-01-01) 전부터 갖고 있던 코인은 이 가격과 실제 취득가 중 **큰 쪽**을 취득가로 씁니다. \(TaxCopy.deemedAsOfDetail)",
             state: needed.isEmpty ? .done : .needsAction,
             section: .settings,
             actionTitle: needed.isEmpty ? nil : "입력하기"
@@ -138,7 +140,7 @@ struct SetupProgress {
         let titles = [
             (3, "거래소 간 전송 연결", "국내 출금과 해외 입금을 이어 붙입니다."),
             (4, "환율 채우기", "해외 거래를 원화로 바꾸는 데 필요합니다."),
-            (5, "\(deemedAsOf) 시가 입력", "과세 시작 전 보유분의 취득가를 정합니다."),
+            (5, "\(TaxCopy.deemedAsOfLabel) 입력", "과세 시작 전 보유분의 취득가를 정합니다."),
             (6, "계산하고 신고자료 받기", "위 단계가 끝나면 예상 세액이 나옵니다.")
         ]
         return titles.filter { $0.0 >= start }.map {

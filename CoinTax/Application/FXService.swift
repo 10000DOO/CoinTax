@@ -96,21 +96,9 @@ final class FXService {
             if needsAmount, (e.quoteAsset == nil) || (e.quoteAsset?.isUSDTish == true) {
                 needDay(e)
             }
-
-            // 수수료가 USD 연동 자산이면 그 환산에도 환율이 필요하다.
-            // 원화 금액이 이미 있는 매수라도 수수료가 USDT 면 환율을 써야 하므로,
-            // 위 조건만 보면 엔진이 요구하는 날짜를 놓친다.
-            let feeNeedsFX: Bool
-            switch e.type {
-            case .buy: feeNeedsFX = true
-            case .sell: feeNeedsFX = e.timestamp >= tTax
-            default: feeNeedsFX = false
-            }
-            if feeNeedsFX,
-               let fee = e.feeAmount, fee != 0,
-               let fa = e.feeAsset, fa.isUSDTish, fa != e.baseAsset {
-                needDay(e)
-            }
+            // 코인으로 낸 수수료는 환율이 필요 없다 — 엔진이 그 자산 장부에서 처분해
+            // **장부 원가**를 부대비용으로 쓴다 (`CostBasisEngine.feeCostKRW`).
+            // 여기서 환율을 요구하면 쓰지도 않는 날짜 때문에 계산이 막힌다.
         }
         return days.sorted()
     }
@@ -128,20 +116,21 @@ final class FXService {
         }
         guard !target.isEmpty else { return [:] }
 
-        let fetched = try await remoteClient.fetchUSD_KRW(days: target)
-        let sourceLabel: String = {
-            if remoteClient is CompositeFXClient {
-                return FXKeychain.loadECOSKey() != nil ? "remote-ecos-or-public" : "remote-public"
-            }
-            if remoteClient is ECOSFXClient { return "remote-ecos" }
-            if remoteClient is PublicUSDKRWClient { return "remote-public" }
-            return "remote"
-        }()
-        for (day, rate) in fetched {
-            try setRate(day: day, rate: rate, project: project, source: sourceLabel)
+        // 출처는 **날짜마다** 클라이언트가 알려준 값을 그대로 쓴다.
+        // 예전처럼 `remote-ecos-or-public` 한 덩어리로 붙이면, 한국은행 인증키로 정상 조회한
+        // 날짜까지 「참고 시세 사용」 경고에 걸려(`source.contains("public")`) 계산이
+        // `검증 완료` 로 올라가지 못한다.
+        let fetched = try await remoteClient.fetchWithSources(days: target)
+        for (day, rate) in fetched.rates {
+            try setRate(day: day, rate: rate, project: project, source: fetched.sources[day] ?? "remote")
         }
-        return fetched
+        lastRemoteFilledECOS = fetched.sources.values.contains("remote-ecos")
+        return fetched.rates
     }
+
+    /// 마지막 자동 조회에서 한국은행(ECOS)으로 채운 날짜가 하나라도 있었는지.
+    /// 인증키를 넣었는데 계속 false 면 키가 거부된 것이다 — 안내 문구를 바꾸는 데 쓴다.
+    private(set) var lastRemoteFilledECOS = false
 
     /// 계산 직전: 누락일 자동 채움. 남은 누락일 목록을 돌려준다.
     ///

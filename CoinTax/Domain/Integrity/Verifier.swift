@@ -145,10 +145,8 @@ enum Verifier {
             if let quote = e.quoteAsset, let quoteQty = e.cryptoQuoteQuantity {
                 bump(e.accountID, quote, e.type == .buy ? -quoteQty : quoteQty)
             }
-            // 제3자산 수수료는 그 자산 장부에서 빠진다
             if let fa = e.feeAsset, let fee = e.feeAmount, fee != 0,
-               fa != e.baseAsset, !fa.isKRW, !fa.isUSDTish,
-               e.type == .buy || e.type == .sell {
+               feeReducesBook(e, feeAsset: fa) {
                 bump(e.accountID, fa, -Money.abs(fee))
             }
         }
@@ -189,10 +187,21 @@ enum Verifier {
             let dQty = Money.abs(d.quantity)
             let lost = wQty - dQty
             let tolerance = max(wQty * Decimal(string: "0.01")!, w.feeAmount.map { Money.abs($0) } ?? 0, Decimal(string: "0.000001")!)
-            if lost < -Money.qtyEpsilon || lost > tolerance {
+            if lost < -Money.qtyEpsilon {
+                // 받은 양이 보낸 양보다 많다 — 잘못 연결했거나 자료가 틀렸다
                 issues.append(.init(
                     id: "V-QTY-03", severity: "critical",
-                    message: "확정 전송의 출고−입고 차이가 허용 범위를 벗어납니다 (\(Money.decimalString(lost)))",
+                    message: "확정 전송의 입금이 출금보다 많습니다 (\(Money.decimalString(-lost))) — 잘못 연결했을 수 있습니다",
+                    context: w.baseAsset.code
+                ))
+            } else if lost > tolerance {
+                // 소액 전송은 네트워크 수수료가 1%를 훌쩍 넘는다 (10 USDT 전송에 1 USDT = 10%).
+                // 이건 정상 전송이므로 Critical 로 막으면 **신고자료 export 가 잠긴다.**
+                // 매칭 화면도 같은 구간을 「확인 필요」 후보로 제시한다 — 판단은 사용자가 이미 했다.
+                let ratio = wQty > 0 ? NSDecimalNumber(decimal: lost / wQty).doubleValue * 100 : 0
+                issues.append(.init(
+                    id: "V-QTY-03", severity: "warning",
+                    message: String(format: "확정 전송에서 %.1f%% (%@ %@)가 사라졌습니다 — 네트워크 수수료가 맞는지 확인하세요 (그만큼 취득원가가 소멸합니다)", ratio, Money.decimalString(lost), w.baseAsset.code),
                     context: w.baseAsset.code
                 ))
             }
@@ -254,10 +263,8 @@ enum Verifier {
                 let quoteKey = "\(e.accountID.raw.uuidString)|\(quote.code)"
                 preTaxQty[quoteKey] = (preTaxQty[quoteKey] ?? 0) + (e.type == .buy ? -quoteQty : quoteQty)
             }
-            // 제3자산 수수료(BNB 등)는 그 자산 장부에서 빠진다 — 빼먹으면 해당 자산에 거짓 실패가 난다
             if let fa = e.feeAsset, let fee = e.feeAmount, fee != 0,
-               fa != e.baseAsset, !fa.isKRW, !fa.isUSDTish,
-               e.type == .buy || e.type == .sell {
+               feeReducesBook(e, feeAsset: fa) {
                 let feeKey = "\(e.accountID.raw.uuidString)|\(fa.code)"
                 preTaxQty[feeKey] = (preTaxQty[feeKey] ?? 0) - Money.abs(fee)
             }
@@ -268,7 +275,7 @@ enum Verifier {
                !r.shortfallKeys.contains(key) {
                 issues.append(.init(
                     id: "V-DEM-01", severity: "critical",
-                    message: "의제 스냅샷 수량이 2026-12-31까지 재생 결과와 다릅니다 (기대 \(Money.decimalString(expected)))",
+                    message: "의제 스냅샷 수량이 2027-01-01 0시까지 재생 결과와 다릅니다 (기대 \(Money.decimalString(expected)))",
                     context: d.asset.code
                 ))
             }
@@ -282,7 +289,7 @@ enum Verifier {
         if !r.missingMarketAssets.isEmpty {
             issues.append(.init(
                 id: "V-DEM-04", severity: "critical",
-                message: "의제 시가 누락 — 2026-12-31 시가를 입력하세요",
+                message: "의제 시가 누락 — 2027-01-01 0시(= 2026-12-31 24시) 시가를 입력하세요",
                 context: r.missingMarketAssets.map(\.code).joined(separator: ",")
             ))
         }
@@ -398,6 +405,23 @@ enum Verifier {
             issues: dedupe(issues),
             calculatedAt: Date()
         )
+    }
+
+    /// 이 수수료가 **수수료 자산 장부의 수량을 별도로 줄이는가**.
+    ///
+    /// 엔진 `CostBasisEngine.feeCostKRW` 와 규칙이 반드시 같아야 한다. 어긋나면 정상 계산이
+    /// 「이벤트 수량 합과 보유 수량이 다릅니다」로 막힌다.
+    ///
+    /// - 원화 수수료: 장부와 무관 (금액일 뿐)
+    /// - 매수의 기초자산 수수료: 받는 수량에서 이미 차감했다 → 다시 빼지 않는다
+    /// - 매도의 기초자산 수수료: 체결 수량과 **별도로** 빠진다 → 뺀다
+    ///   (원본이 이미 순액인 판본 `quantityIsNetOfFee` 만 예외)
+    /// - 그 밖의 코인 수수료(USDT·BNB…): 항상 뺀다
+    private static func feeReducesBook(_ e: LedgerEvent, feeAsset fa: AssetSymbol) -> Bool {
+        guard e.type == .buy || e.type == .sell, !fa.isKRW else { return false }
+        guard fa == e.baseAsset else { return true }
+        if e.type == .buy { return false }
+        return !e.quantityIsNetOfFee
     }
 
     /// 같은 ID·메시지·문맥이 반복되면 하나로 합친다 (SwiftUI 목록 식별자 중복 방지 — 리뷰 4-6)

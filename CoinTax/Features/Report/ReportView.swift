@@ -224,7 +224,7 @@ struct ReportView: View {
         return Card(
             title: "과세 시작 전 보유분 취득가",
             systemImage: "clock.arrow.circlepath",
-            footnote: "2027-01-01 전부터 갖고 있던 코인은 «실제 산 값» 과 «2026-12-31 시가» 중 큰 쪽을 취득가로 봅니다."
+            footnote: "2027-01-01 전부터 갖고 있던 코인은 «실제 산 값» 과 «\(TaxCopy.deemedAsOfLabel)» 중 큰 쪽을 취득가로 봅니다. \(TaxCopy.deemedAsOfDetail)"
         ) {
             TableHeader(columns: [("자산", 56, .leading), ("수량", 96, .trailing), ("실제 취득가", 100, .trailing),
                                   ("시가", 100, .trailing), ("적용", 100, .trailing), ("사유", 70, .trailing)])

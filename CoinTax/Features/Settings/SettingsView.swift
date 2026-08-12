@@ -209,13 +209,13 @@ struct SettingsView: View {
         }
     }
 
-    // MARK: - 2026-12-31 시가
+    // MARK: - 의제취득가용 시가 (2027-01-01 0시)
 
     private var marketPriceCard: some View {
         Card(
-            title: "2026-12-31 시가",
+            title: TaxCopy.deemedAsOfLabel,
             systemImage: "clock.arrow.circlepath",
-            footnote: "과세는 2027-01-01 양도분부터입니다. 그 전부터 갖고 있던 코인은 «실제 산 값» 과 «이 시가» 중 큰 쪽을 취득가로 봅니다. 홈택스·손택스 「가상자산 일평균가격 조회」에서 확인할 수 있습니다."
+            footnote: "과세는 2027-01-01 양도분부터입니다. 그 전부터 갖고 있던 코인은 «실제 산 값» 과 «이 시가» 중 큰 쪽을 취득가로 봅니다. \(TaxCopy.deemedAsOfDetail) 홈택스·손택스 「가상자산 일평균가격 조회」에서 확인할 수 있습니다."
         ) {
             HStack {
                 statusDot(missingMarket.isEmpty ? .positive : .warning)
