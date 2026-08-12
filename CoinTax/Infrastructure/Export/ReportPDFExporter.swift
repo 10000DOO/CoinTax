@@ -12,10 +12,10 @@ enum ReportPDFExporter {
             throw CoinTaxError.verifyFail
         }
 
-        let pageWidth: CGFloat = 595.2  // A4
+        let pageWidth: CGFloat = Self.pageWidth
         let pageHeight: CGFloat = 841.8
-        let margin: CGFloat = 40
-        let fontSize: CGFloat = 9.5
+        let margin: CGFloat = Self.margin
+        let fontSize: CGFloat = Self.fontSize
         let lineHeight: CGFloat = fontSize * 1.45
         let usableHeight = pageHeight - margin * 2
         let linesPerPage = max(1, Int(usableHeight / lineHeight))
@@ -27,10 +27,7 @@ enum ReportPDFExporter {
             throw CoinTaxError.parseRow("PDF 생성 실패")
         }
 
-        let attrs: [NSAttributedString.Key: Any] = [
-            .font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
-            .foregroundColor: NSColor.black
-        ]
+        let attrs = Self.textAttributes
 
         let allLines = buildLines(summary)
         let pages = stride(from: 0, to: max(allLines.count, 1), by: linesPerPage).map { start in
@@ -66,7 +63,20 @@ enum ReportPDFExporter {
         return data as Data
     }
 
+    // 종이·글꼴은 한 곳에서 정한다 — 줄바꿈 폭 계산과 실제 그리기가 어긋나면 다시 잘린다
+    private static let pageWidth: CGFloat = 595.2  // A4
+    private static let margin: CGFloat = 40
+    private static let fontSize: CGFloat = 9.5
+    private static var textAttributes: [NSAttributedString.Key: Any] {
+        [.font: NSFont.monospacedSystemFont(ofSize: fontSize, weight: .regular),
+         .foregroundColor: NSColor.black]
+    }
+    /// 실제로 글자를 그릴 수 있는 폭. `draw(in:)` 의 사각형과 **같은 값**이어야 한다.
+    private static var textWidth: CGFloat { pageWidth - margin * 2 }
+
     private static func buildLines(_ s: TaxYearSummary) -> [String] {
+        let attrs = textAttributes
+        func wrapped(_ text: String) -> [String] { wrap(text, maxWidth: textWidth, attrs: attrs) }
         var lines: [String] = []
         lines.append("CoinTax 과세연도 요약 (참고용 · 세무 자문 아님)")
         lines.append("PolicyBundle: \(s.policyBundleID)")
@@ -120,31 +130,31 @@ enum ReportPDFExporter {
         if let issues = s.verification?.issues, !issues.isEmpty {
             lines.append("검증 이슈 \(issues.count)건")
             for i in issues {
-                lines.append("  [\(i.severity)] \(i.id): \(i.message)")
+                lines.append(contentsOf: wrapped("  [\(i.severity)] \(i.id): \(i.message)"))
             }
             lines.append("")
         }
 
         lines.append("고지")
         for (i, d) in s.disclaimers.enumerated() {
-            for chunk in wrap("\(i + 1). \(d)", width: 92) {
+            for chunk in wrapped("\(i + 1). \(d)") {
                 lines.append(chunk)
             }
         }
         lines.append("")
         lines.append("주의사항")
         for n in TaxCopy.notices {
-            for chunk in wrap("- \(n)", width: 92) {
+            for chunk in wrapped("- \(n)") {
                 lines.append(chunk)
             }
         }
         lines.append("")
         lines.append("세무 확인이 필요한 항목 (신고 전 반드시 확인)")
         for q in TaxOpenQuestions.all {
-            for chunk in wrap("- [\(q.id)/\(q.kind.label)] \(q.title)", width: 92) {
+            for chunk in wrapped("- [\(q.id)/\(q.kind.label)] \(q.title)") {
                 lines.append(chunk)
             }
-            for chunk in wrap("    현재 가정: \(q.currentAssumption.replacingOccurrences(of: "\n", with: " "))", width: 92) {
+            for chunk in wrapped("    현재 가정: \(q.currentAssumption.replacingOccurrences(of: "\n", with: " "))") {
                 lines.append(chunk)
             }
         }
@@ -156,18 +166,58 @@ enum ReportPDFExporter {
     }
 
     /// 고정폭 글꼴 기준 줄바꿈 — 고지 문구가 페이지 밖으로 밀려나지 않게 한다.
-    private static func wrap(_ text: String, width: Int) -> [String] {
-        guard text.count > width else { return [text] }
+    /// 줄바꿈을 **실제로 그려지는 폭**으로 계산한다.
+    ///
+    /// 예전에는 글자 수 92자로 잘랐다. 고정폭 글꼴에서 한글은 영문의 약 두 배 폭이라
+    /// 종이 폭을 넘고, `NSString.draw(in:)` 는 넘은 부분을 **그냥 잘라 버린다.**
+    /// 그래서 `05-decisions §7.3` 이 문구 그대로 싣도록 잠근 필수 고지가 실제로는
+    /// 문장 중간에서 끊겨 있었다 (감사 D-4).
+    ///
+    /// 한글 문장은 공백이 드물어 한 「단어」가 한 줄을 넘기는 일이 흔하다.
+    /// 그래서 공백 단위로 붙이다가 그래도 넘치면 **글자 단위로 쪼갠다.**
+    private static func wrap(_ text: String, maxWidth: CGFloat, attrs: [NSAttributedString.Key: Any]) -> [String] {
+        func width(_ s: String) -> CGFloat { (s as NSString).size(withAttributes: attrs).width }
+        guard width(text) > maxWidth else { return [text] }
+
+        /// 공백이 없어도 폭을 넘지 않게 글자 단위로 쪼갠다
+        func breakLongToken(_ token: String, indent: String) -> [String] {
+            var out: [String] = []
+            var line = ""
+            for ch in token {
+                let candidate = line.isEmpty ? String(ch) : line + String(ch)
+                if width(out.isEmpty ? candidate : indent + candidate) <= maxWidth {
+                    line = candidate
+                } else {
+                    out.append(out.isEmpty ? line : indent + line)
+                    line = String(ch)
+                }
+            }
+            if !line.isEmpty { out.append(out.isEmpty ? line : indent + line) }
+            return out
+        }
+
+        let indent = "   "
         var out: [String] = []
         var line = ""
-        for word in text.split(separator: " ", omittingEmptySubsequences: false) {
-            if line.isEmpty {
-                line = String(word)
-            } else if line.count + 1 + word.count <= width {
-                line += " " + word
-            } else {
+        for token in text.split(separator: " ", omittingEmptySubsequences: false).map(String.init) {
+            let prefix = out.isEmpty && line.isEmpty ? "" : (line.isEmpty ? indent : "")
+            let candidate = line.isEmpty ? prefix + token : line + " " + token
+            if width(candidate) <= maxWidth {
+                line = candidate
+                continue
+            }
+            if !line.isEmpty {
                 out.append(line)
-                line = "   " + word
+                line = ""
+            }
+            // 새 줄에 혼자 놓아도 넘치는 토큰은 글자 단위로 쪼갠다
+            let base = out.isEmpty ? token : indent + token
+            if width(base) <= maxWidth {
+                line = base
+            } else {
+                let pieces = breakLongToken(token, indent: indent)
+                out.append(contentsOf: pieces.dropLast())
+                line = pieces.last ?? ""
             }
         }
         if !line.isEmpty { out.append(line) }
