@@ -13,17 +13,17 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
     }
 
     func parse(url: URL, projectID: ProjectID, accountID: AccountID) throws -> ParseResult {
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let text = try CSVUtil.readText(url: url)
         return try parse(text: text, fileName: url.lastPathComponent, projectID: projectID, accountID: accountID)
     }
 
     func parse(text: String, fileName: String, projectID: ProjectID, accountID: AccountID) throws -> ParseResult {
-        let lines = CSVUtil.parseLines(text)
+        let lines = CSVUtil.parseLines(CSVUtil.stripBOM(text))
         guard lines.count >= 2 else { throw CoinTaxError.parseRow("OKX Funding 파일 너무 짧음") }
         let metaLine = lines[0].joined(separator: ",")
         let tz = CSVUtil.parseTimezoneOffset(metaLine)
         let header = lines[1]
-        let map = Dictionary(uniqueKeysWithValues: header.enumerated().map { ($1, $0) })
+        let map = CSVUtil.headerIndex(header)
         guard map["Type"] != nil, map["Amount"] != nil, map["Symbol"] != nil else {
             throw CoinTaxError.parserReject("OKX Funding 헤더 불일치")
         }
@@ -34,13 +34,18 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
         }
 
         var events: [LedgerEvent] = []
+        var warnings: [String] = []
         var ignored = 0
+        for dup in CSVUtil.duplicateHeaders(header) {
+            warnings.append("열 이름 중복 '\(dup)' — 첫 번째 열만 사용합니다")
+        }
         for (i, row) in lines.dropFirst(2).enumerated() {
             let typeStr = col(row, "Type")
             let amount = Money.parseDecimal(col(row, "Amount")) ?? 0
             let symbol = col(row, "Symbol")
             let timeStr = col(row, "Time")
             guard let ts = CSVUtil.parseDate(timeStr, timeZone: tz, formats: ["yyyy-MM-dd HH:mm:ss"]) else {
+                warnings.append("행 \(i+3) 시각 파싱 실패 '\(timeStr)' — 건너뜀")
                 continue
             }
             let mapped: (EventType, Decimal)?
@@ -53,6 +58,12 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
                 mapped = (.transferInternal, Money.abs(amount))
             case "To unified trading account":
                 mapped = (.transferInternal, -Money.abs(amount))
+            // 계정 마이그레이션 기록. in/out 이 같은 시각·같은 수량으로 짝을 이루므로 내부 이동이다.
+            // 「미지원 Type」으로 버리면 경고만 쌓이고 검증 상태가 근거 없이 내려간다.
+            case "Data migration in":
+                mapped = (.transferInternal, Money.abs(amount))
+            case "Data migration out":
+                mapped = (.transferInternal, -Money.abs(amount))
             case "Fee rebate":
                 mapped = (.income, Money.abs(amount))
             default:
@@ -60,6 +71,7 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
             }
             guard let (etype, qty) = mapped else {
                 ignored += 1
+                warnings.append("행 \(i+3) 미지원 Type '\(typeStr)' — 제외")
                 continue
             }
             var e = LedgerEvent(
@@ -81,7 +93,7 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
             parserID: parserID,
             events: events,
             meta: ["timezone": metaLine],
-            warnings: [],
+            warnings: warnings,
             errors: [],
             ignoredCount: ignored
         )

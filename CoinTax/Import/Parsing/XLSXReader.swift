@@ -1,5 +1,4 @@
 import Foundation
-import Compression
 
 /// Lightweight XLSX first-sheet reader (sharedStrings + inlineStr).
 enum XLSXReader {
@@ -117,12 +116,6 @@ enum XLSXReader {
 
     private static func cellValue(attrs: String, body: String, shared: [String]) -> String {
         if attrs.contains("t=\"inlineStr\"") {
-            if let r = body.range(of: #"<t[^>]*>(.*?)</t>"#, options: .regularExpression) {
-                let inner = String(body[r])
-                if let t = inner.range(of: #">(.+)<"#, options: .regularExpression) {
-                    // simpler extract
-                }
-            }
             let tPattern = try! NSRegularExpression(pattern: #"<t[^>]*>(.*?)</t>"#)
             let ns = body as NSString
             if let m = tPattern.firstMatch(in: body, range: NSRange(location: 0, length: ns.length)) {

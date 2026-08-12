@@ -21,9 +21,16 @@ struct GenericTabularMapper: ExchangeDocumentParser {
     ]
 
     var columnMap: [String: String] // standardField -> actual header name (case-insensitive match applied)
+    /// 원본 시각의 시간대. 국내 거래소 파일은 KST 이므로 UTC 고정이면 9시간 밀린다(리뷰 6-4).
+    var timeZoneIdentifier: String
 
-    init(columnMap: [String: String] = [:]) {
+    init(columnMap: [String: String] = [:], timeZoneIdentifier: String = "UTC") {
         self.columnMap = columnMap
+        self.timeZoneIdentifier = timeZoneIdentifier
+    }
+
+    private var sourceTimeZone: TimeZone {
+        TimeZone(identifier: timeZoneIdentifier) ?? TimeZone(secondsFromGMT: 0)!
     }
 
     func detect(_ probe: FormatProbeResult) -> Double {
@@ -40,12 +47,12 @@ struct GenericTabularMapper: ExchangeDocumentParser {
             let rows = try XLSXReader.readFirstSheetRows(url: url)
             return try parseRows(rows, projectID: projectID, accountID: accountID, fileName: url.lastPathComponent)
         }
-        let text = try String(contentsOf: url, encoding: .utf8)
+        let text = try CSVUtil.readText(url: url)
         return try parse(text: text, fileName: url.lastPathComponent, projectID: projectID, accountID: accountID)
     }
 
     func parse(text: String, fileName: String, projectID: ProjectID, accountID: AccountID) throws -> ParseResult {
-        let lines = CSVUtil.parseLines(text)
+        let lines = CSVUtil.parseLines(CSVUtil.stripBOM(text))
         return try parseRows(lines, projectID: projectID, accountID: accountID, fileName: fileName)
     }
 
@@ -97,9 +104,9 @@ struct GenericTabularMapper: ExchangeDocumentParser {
             }()
 
             let tsStr = cell("timestamp")
-            let ts = CSVUtil.parseDate(tsStr, timeZone: TimeZone(secondsFromGMT: 0)!, formats: [
+            let ts = CSVUtil.parseDate(tsStr, timeZone: sourceTimeZone, formats: [
                 "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "yyyy-MM-dd", "yy-MM-dd HH:mm:ss"
-            ]) ?? CSVUtil.parseDate(tsStr, timeZone: TaxTime.seoul, formats: ["yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd"])
+            ])
             guard let timestamp = ts else {
                 errors.append("행 \(i + 2): 시각 파싱 실패 '\(tsStr)'")
                 continue
@@ -141,7 +148,11 @@ struct GenericTabularMapper: ExchangeDocumentParser {
         return ParseResult(
             parserID: parserID,
             events: events,
-            meta: ["fileName": fileName, "mappedColumns": resolved.keys.sorted().joined(separator: ",")],
+            meta: [
+                "fileName": fileName,
+                "mappedColumns": resolved.keys.sorted().joined(separator: ","),
+                "sourceTimeZone": timeZoneIdentifier
+            ],
             warnings: warnings,
             errors: errors,
             ignoredCount: 0
@@ -150,7 +161,13 @@ struct GenericTabularMapper: ExchangeDocumentParser {
 
     private func resolveHeaders(_ header: [String]) -> [String: String] {
         var result: [String: String] = [:]
-        let lowerMap = Dictionary(uniqueKeysWithValues: header.map { ($0.lowercased().trimmingCharacters(in: .whitespaces), $0) })
+        // 중복 키로 크래시하지 않도록 첫 번째 열 채택 (리뷰 4-1)
+        var lowerMap: [String: String] = [:]
+        for raw in header {
+            let key = CSVUtil.stripBOM(raw).lowercased().trimmingCharacters(in: .whitespaces)
+            guard !key.isEmpty, lowerMap[key] == nil else { continue }
+            lowerMap[key] = raw
+        }
 
         for (field, aliases) in Self.defaultAliases {
             if let explicit = columnMap[field] {
