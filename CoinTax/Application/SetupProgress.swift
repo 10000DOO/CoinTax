@@ -76,10 +76,12 @@ struct SetupProgress {
             id: 3,
             title: "거래소 간 전송 연결",
             detail: candidates.isEmpty
-                ? (confirmed > 0 ? "\(confirmed)건 연결됨" + (unmatched > 0 ? " · 미연결 \(unmatched)건" : "")
-                                 : "연결할 전송이 없습니다.")
+                ? (confirmed > 0
+                    ? "\(confirmed)건 연결됨" + (unmatched > 0 ? " · 상대 없는 출금 \(unmatched)건 — 개인지갑으로 보낸 것이면 지정해 두세요 (안 하면 산 값이 사라집니다)" : "")
+                    : "연결할 전송이 없습니다.")
                 : "연결 안 된 후보 \(candidates.count)건이 있습니다. 연결하지 않으면 취득원가가 사라져 세금이 커집니다.",
-            state: candidates.isEmpty ? .done : .needsAction,
+            // 상대 없는 출금이 남아 있으면 아직 할 일이 있다 — 조용히 「완료」로 두면 산 값이 사라진 채 계산된다
+            state: (candidates.isEmpty && unmatched == 0) ? .done : .needsAction,
             section: .matching,
             actionTitle: candidates.isEmpty ? "보기" : "확인"
         ))

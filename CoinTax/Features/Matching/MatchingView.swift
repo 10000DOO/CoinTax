@@ -49,7 +49,7 @@ struct MatchingView: View {
                          caption: unmatchedWithdrawals.isEmpty ? "없음" : "취득원가가 사라집니다",
                          tone: unmatchedWithdrawals.isEmpty ? .neutral : .warning)
             }
-            Text("연결하지 않으면 보낸 쪽 취득원가가 없어지고 받은 쪽은 0원으로 시작합니다. 그만큼 세금이 실제보다 커집니다. 개인 지갑으로 보낸 것이라면 연결할 상대가 없는 게 맞습니다.")
+            Text("연결하지 않으면 보낸 쪽 취득원가가 없어지고 받은 쪽은 0원으로 시작합니다. 그만큼 세금이 실제보다 커집니다. 개인 지갑으로 보낸 것이라면 아래에서 「개인지갑으로」를 눌러 두세요 — 그래야 산 값이 지갑까지 이어집니다.")
                 .font(Theme.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -142,12 +142,26 @@ struct MatchingView: View {
         Card(
             title: "연결 상대를 못 찾은 전송",
             systemImage: "questionmark.circle",
-            footnote: "개인 지갑으로 보냈다면 정상입니다. 다른 거래소로 보낸 것인데 여기 있다면 그 거래소의 입금 내역 파일을 아직 안 넣은 것입니다."
+            footnote: "이대로 두면 보낸 코인의 취득원가가 사라집니다. 나중에 그 코인을 거래소로 다시 들여와 팔면 «산 값 0원»으로 계산되어 판 금액 전부가 이익이 됩니다."
         ) {
             if !unmatchedWithdrawals.isEmpty {
-                Text("보낸 것 \(unmatchedWithdrawals.count)건").font(Theme.caption.weight(.semibold)).foregroundStyle(.secondary)
-                ForEach(unmatchedWithdrawals.prefix(10), id: \.id) { e in
+                HStack {
+                    Text("보낸 것 \(unmatchedWithdrawals.count)건")
+                        .font(Theme.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    Button("전부 개인지갑으로 (\(unmatchedWithdrawals.count))") { moveAllToWallet() }
+                        .buttonStyle(.bordered).controlSize(.small)
+                }
+                Text("**개인지갑(레저·메타마스크 등)으로 보낸 것**이면 「개인지갑으로」를 누르세요 — 산 값이 지갑까지 따라갑니다. "
+                     + "**다른 거래소로 보낸 것**이면 그 거래소 파일을 먼저 넣으세요. "
+                     + "**실제로 팔았거나 남에게 보낸 것**이면 개인지갑이 아닙니다 (양도로 신고해야 합니다).")
+                    .font(Theme.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(unmatchedWithdrawals.prefix(20), id: \.id) { e in
                     unmatchedRow(e, outgoing: true)
+                }
+                if unmatchedWithdrawals.count > 20 {
+                    Text("외 \(unmatchedWithdrawals.count - 20)건").font(Theme.caption).foregroundStyle(.secondary)
                 }
             }
             if !unmatchedDeposits.isEmpty {
@@ -172,6 +186,11 @@ struct MatchingView: View {
                 Pill(text: hint, tone: .neutral)
             }
             Spacer()
+            if outgoing {
+                Button("개인지갑으로") { moveToWallet(e) }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("거래소 밖 내 지갑으로 보낸 것으로 처리합니다. 산 값이 지갑으로 이어지고, 전송 자체는 세금이 붙지 않습니다")
+            }
         }
         .padding(.vertical, 1)
     }
@@ -316,6 +335,38 @@ struct MatchingView: View {
         } catch {
             set(error.localizedDescription, .danger)
         }
+    }
+
+    private func moveToWallet(_ e: LedgerEventEntity) {
+        guard let project = env.currentProject else { return }
+        do {
+            try env.matchingService.moveToWallet(withdrawal: e, project: project)
+            env.invalidateCalculation()
+            refresh()
+            set("개인지갑으로 옮겼습니다 — 산 값이 이어집니다.", .positive)
+        } catch let err as CoinTaxError {
+            set(err.errorDescription ?? "처리하지 못했습니다", .danger)
+        } catch {
+            set(error.localizedDescription, .danger)
+        }
+    }
+
+    private func moveAllToWallet() {
+        guard let project = env.currentProject else { return }
+        var ok = 0
+        var failed = 0
+        for e in unmatchedWithdrawals {
+            do {
+                try env.matchingService.moveToWallet(withdrawal: e, project: project)
+                ok += 1
+            } catch {
+                failed += 1
+            }
+        }
+        env.invalidateCalculation()
+        refresh()
+        set(failed == 0 ? "\(ok)건을 개인지갑으로 옮겼습니다." : "\(ok)건 처리 · \(failed)건 실패",
+            failed == 0 ? .positive : .warning)
     }
 
     private func linkManually() {

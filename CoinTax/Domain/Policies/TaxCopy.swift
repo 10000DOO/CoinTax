@@ -43,7 +43,7 @@ enum TaxCopy {
         "2027-01-01 시행·기본공제 250만 원·세율 20%+2% 는 2026-08 기준 공개 안내에 따른 가정입니다. 시행 유예·개정 시 결과가 달라집니다."
 
     static let unmatchedWithdrawalCost =
-        "연결되지 않은 출금의 취득원가는 소멸 처리됩니다(세액이 커지는 방향). 상대 입금을 연결하면 원가가 이전됩니다."
+        "연결되지 않은 출금의 취득원가는 소멸 처리됩니다(세액이 커지는 방향). 상대 입금을 연결하거나, 개인지갑으로 보낸 것이면 「전송 연결」 화면에서 개인지갑으로 지정하면 원가가 이어집니다."
 
     static var notices: [String] {
         [zeroCostAcquisition, lossNotCarriedForward, scheduleMayChange, unmatchedWithdrawalCost]

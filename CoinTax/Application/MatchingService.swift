@@ -85,10 +85,104 @@ final class MatchingService {
         try confirm(candidate: candidate, project: project)
     }
 
+    // MARK: - 개인지갑으로 보낸 출금
+
+    /// 개인지갑 입고로 만들어진 이벤트임을 나타내는 표식. 연결 해제 시 함께 지운다.
+    static let walletSourceKind = "manual-wallet-v1"
+
+    /// 상대 입금이 없는 출금을 **개인지갑으로 옮긴 것**으로 처리한다.
+    ///
+    /// 거래소 밖으로 나간 코인은 앱에 도착지가 없어 「미매칭 출금 = 취득원가 소멸」이 된다.
+    /// 그러면 그 코인을 나중에 거래소로 다시 들여와 팔 때 **취득가 0원**이 되어 판 금액 전부가
+    /// 이익으로 잡히고, 과세 시작 시점(2027-01-01 0시)의 의제취득가도 받지 못한다.
+    ///
+    /// 여기서는 개인지갑 계정에 **도착 입금 이벤트를 만들고 확정 연결**해서 원가가 따라가게 한다.
+    /// 전송 자체는 양도가 아니므로 세금이 지금 생기지는 않는다.
+    ///
+    /// - Important: **자동으로 하지 않는다.** 상대 없는 출금은 ① 개인지갑 ② 아직 안 넣은 거래소 자료
+    ///   ③ 실제 매도·타인 송금(= 양도) 셋 중 하나다. ②·③을 지갑으로 처리하면 각각
+    ///   「계정 전체 누락」과 「과소신고」를 숨기게 되므로 사용자가 건별로 판단해야 한다.
+    /// - Parameter receivedQty: 지갑에 실제로 도착한 수량. 생략하면 출금 수량 그대로.
+    ///   (출금 수량이 네트워크 수수료를 포함한 총액인 거래소는 그만큼 줄여 넣어야 한다)
+    @discardableResult
+    func moveToWallet(withdrawal: LedgerEventEntity, project: ProjectEntity, receivedQty: Decimal? = nil) throws -> LedgerEventEntity {
+        guard withdrawal.type == EventType.withdrawal.rawValue else {
+            throw CoinTaxError.parserReject("출금 거래만 개인지갑으로 보낼 수 있습니다")
+        }
+        guard withdrawal.baseAsset.uppercased() != "KRW" else {
+            throw CoinTaxError.parserReject("원화 출금은 가상자산 전송이 아닙니다")
+        }
+        let already = project.links.contains {
+            $0.fromEventID == withdrawal.id && $0.status == LinkStatus.confirmed.rawValue
+        }
+        guard !already else {
+            throw CoinTaxError.parserReject("이미 다른 입금에 연결된 출금입니다")
+        }
+        let wQty = Money.abs(Decimal(string: withdrawal.quantity) ?? 0)
+        guard wQty > 0 else {
+            throw CoinTaxError.parserReject("수량이 0인 출금은 처리할 수 없습니다")
+        }
+        let arrived = receivedQty.map { Money.abs($0) } ?? wQty
+        guard arrived > 0, arrived <= wQty else {
+            throw CoinTaxError.parserReject("도착 수량은 0보다 크고 출금 수량 이하여야 합니다")
+        }
+
+        let ps = ProjectService(modelContext: modelContext)
+        let wallet = try ps.ensureAccount(.wallet, in: project)
+        guard wallet.id != withdrawal.accountID else {
+            throw CoinTaxError.parserReject("개인지갑에서 나간 출금입니다")
+        }
+
+        // 도착 시각은 출금과 같은 순간으로 둔다 (온체인 도착 시각을 알 수 없다).
+        // 같은 시각이면 원장 정렬이 `rawRef` 로 갈리므로, 출금보다 뒤에 오도록 `wallet:` 접두사를 쓴다.
+        var event = LedgerEvent(
+            projectID: ProjectID(project.id),
+            accountID: AccountID(wallet.id),
+            timestamp: withdrawal.timestamp,
+            type: .deposit,
+            baseAsset: AssetSymbol(withdrawal.baseAsset),
+            quantity: arrived,
+            network: withdrawal.network,
+            addressHash: withdrawal.addressHash,
+            txidHash: withdrawal.txidHash,
+            memo: "개인지갑 입고 (직접 지정)",
+            sourceKind: Self.walletSourceKind,
+            rawRef: "wallet:\(withdrawal.id.uuidString)"
+        )
+        event.fingerprint = Fingerprint.make(for: event, parserID: Self.walletSourceKind)
+        let entity = EntityMappers.makeEntity(from: event)
+        entity.project = project
+        project.events.append(entity)
+        modelContext.insert(entity)
+
+        let link = TransferLinkEntity(
+            fromEventID: withdrawal.id,
+            toEventID: entity.id,
+            status: LinkStatus.confirmed.rawValue,
+            withdrawnQty: Money.decimalString(wQty),
+            receivedQty: Money.decimalString(arrived)
+        )
+        link.score = 1.0
+        link.note = "개인지갑"
+        link.project = project
+        project.links.append(link)
+        modelContext.insert(link)
+        try modelContext.save()
+        return entity
+    }
+
     /// F-MT-02 매칭 해제
+    ///
+    /// 개인지갑 입고는 이 연결 때문에 만들어진 이벤트다. 연결만 끊고 이벤트를 남기면
+    /// 「출처 없는 입금 = 취득가 0원」이 원장에 그대로 남는다.
     func unlink(_ link: TransferLinkEntity, project: ProjectEntity) throws {
+        let toID = link.toEventID
         project.links.removeAll { $0 === link }
         modelContext.delete(link)
+        if let arrival = project.events.first(where: { $0.id == toID && $0.sourceKind == Self.walletSourceKind }) {
+            project.events.removeAll { $0 === arrival }
+            modelContext.delete(arrival)
+        }
         try modelContext.save()
     }
 

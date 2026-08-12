@@ -11,7 +11,8 @@ struct VASPMAElseFIFOResolver: CostMethodResolver {
     func method(for account: Account) -> CostBasisMethod {
         switch account.exchangeCode {
         case .bithumb: return .movingAverage
-        case .binance, .okx, .generic: return .fifo
+        // 개인지갑은 신고수리 사업자가 아니다 → 선입선출법 (05-decisions §1.2)
+        case .binance, .okx, .generic, .wallet: return .fifo
         }
     }
 }

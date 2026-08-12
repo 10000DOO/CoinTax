@@ -69,7 +69,8 @@ struct ImportView: View {
                     .font(Theme.body)
                 Picker("", selection: $selectedAccountID) {
                     Text("자동으로 구분").tag(UUID?.none)
-                    ForEach(env.currentProject?.accounts.sorted { $0.displayName < $1.displayName } ?? [], id: \.id) { acc in
+                    // 개인지갑은 거래소 파일을 넣는 곳이 아니다 — 「전송 연결」에서 출금을 지정해 채운다
+                    ForEach(importableAccounts, id: \.id) { acc in
                         Text(acc.displayName).tag(Optional(acc.id))
                     }
                 }
@@ -133,6 +134,13 @@ struct ImportView: View {
 
     private var selectedAccount: AccountEntity? {
         env.currentProject?.accounts.first { $0.id == selectedAccountID }
+    }
+
+    /// 파일을 넣을 수 있는 계정. 개인지갑은 거래소 export 가 없으므로 제외한다.
+    private var importableAccounts: [AccountEntity] {
+        (env.currentProject?.accounts ?? [])
+            .filter { $0.exchangeCode != ExchangeCode.wallet.rawValue }
+            .sorted { $0.displayName < $1.displayName }
     }
 
     // MARK: 바이낸스 3파일 안내

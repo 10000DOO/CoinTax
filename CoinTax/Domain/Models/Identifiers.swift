@@ -27,10 +27,14 @@ struct LinkID: Hashable, Codable, Sendable {
 
 enum VenueKind: String, Codable, Sendable {
     case domestic, overseas, unknown
+    /// 거래소가 아닌 **내 지갑**(하드웨어·소프트웨어). 여기로 옮기는 것은 양도가 아니다.
+    case wallet
 }
 
 enum ExchangeCode: String, Codable, Sendable {
     case bithumb, binance, okx, generic
+    /// 개인지갑. 파일 import 대상이 아니고, 거래소 출금을 「여기로 보냈다」고 지정할 때만 쓴다.
+    case wallet
 }
 
 enum CostBasisMethod: String, Codable, Sendable {

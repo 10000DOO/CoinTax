@@ -18,6 +18,9 @@ struct Account: Identifiable, Codable, Sendable {
             return Account(id: AccountID(), projectID: projectID, exchangeCode: .okx, venueKind: .overseas, displayName: "OKX", costMethod: .fifo)
         case .generic:
             return Account(id: AccountID(), projectID: projectID, exchangeCode: .generic, venueKind: .unknown, displayName: "기타", costMethod: .fifo)
+        case .wallet:
+            // 개인지갑은 신고수리 가상자산사업자가 아니므로 선입선출법 (05-decisions §1.2)
+            return Account(id: AccountID(), projectID: projectID, exchangeCode: .wallet, venueKind: .wallet, displayName: "개인지갑", costMethod: .fifo)
         }
     }
 }

@@ -308,6 +308,233 @@ final class AuditFixTests: XCTestCase {
     }
 }
 
+// MARK: - A-09 개인지갑으로 보낸 코인은 산 값이 따라가야 한다
+
+@MainActor
+final class PersonalWalletTests: XCTestCase {
+    private func makeProject() throws -> (ModelContext, ProjectEntity, ProjectService) {
+        let container = try CoinTaxModelContainer.make(inMemory: true)
+        let ctx = ModelContext(container)
+        let ps = ProjectService(modelContext: ctx)
+        let project = try ps.createProject(name: "wallet")
+        return (ctx, project, ps)
+    }
+
+    /// 거래소 → 개인지갑 → (2027년) 다시 거래소 → 매도.
+    /// 지갑 처리를 하지 않으면 취득가 0원이 되어 판 금액 전부가 이익이 된다.
+    func testWalletMovePreservesCostBasis() throws {
+        let (ctx, project, ps) = try makeProject()
+        let binance = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "binance" })
+        let pid = ProjectID(project.id)
+
+        // 2026년: 바이낸스에서 BTC 1개를 1억에 사고, 개인지갑으로 출금
+        var buy = LedgerEvent(
+            projectID: pid, accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2026, month: 3, day: 1),
+            type: .buy, baseAsset: AssetSymbol("BTC"), quoteAsset: AssetSymbol("KRW"),
+            quantity: 1, quoteAmountKRW: 100_000_000, sourceKind: "t", rawRef: "r1"
+        )
+        buy.fingerprint = "fp-buy"
+        var out = LedgerEvent(
+            projectID: pid, accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2026, month: 4, day: 1),
+            type: .withdrawal, baseAsset: AssetSymbol("BTC"), quantity: -1,
+            sourceKind: "t", rawRef: "r2"
+        )
+        out.fingerprint = "fp-out"
+        for e in [buy, out] {
+            let entity = EntityMappers.makeEntity(from: e)
+            entity.project = project
+            project.events.append(entity)
+            ctx.insert(entity)
+        }
+        try ctx.save()
+
+        let matching = MatchingService(modelContext: ctx)
+        let withdrawal = try XCTUnwrap(project.events.first { $0.type == "withdrawal" })
+        try matching.moveToWallet(withdrawal: withdrawal, project: project)
+
+        // 개인지갑 계정이 생기고 선입선출법이 붙는다 (05-decisions §1.2)
+        let wallet = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "wallet" })
+        XCTAssertEqual(wallet.costMethod, CostBasisMethod.fifo.rawValue)
+        XCTAssertEqual(wallet.venueKind, VenueKind.wallet.rawValue)
+
+        let accounts = ps.domainAccounts(for: project)
+        let engine = CostBasisEngine(
+            policies: .v1Default,
+            accountsByID: Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
+            fxRates: [:], marketPrices: ["BTC": 150_000_000]
+        )
+        let replay = try engine.replay(events: ps.domainEvents(for: project), links: ps.domainLinks(for: project))
+
+        // 지갑에 BTC 1개가 남아 있다 (보유 현황에서 사라지지 않는다)
+        let held = try XCTUnwrap(replay.holdings.rows.first { $0.accountID?.raw == wallet.id })
+        XCTAssertEqual(held.quantity, 1)
+        XCTAssertEqual(replay.abandonedTotal, 0, "지갑으로 옮겼으면 원가가 소멸하면 안 된다")
+
+        // 실제 취득가 1억이 지갑까지 따라왔고, 그 위에 의제취득가 max(1억, 시가 1.5억)가 적용된다
+        let deemed = try XCTUnwrap(replay.deemedPositions.first { $0.accountID.raw == wallet.id })
+        XCTAssertEqual(deemed.bookUnitKRW, 100_000_000, "산 값이 소멸하지 않고 지갑으로 이어져야 한다")
+        XCTAssertEqual(deemed.deemedUnitKRW, 150_000_000)
+        XCTAssertEqual(deemed.reason, "market")
+        // 재기동 후 장부는 의제 금액 기준
+        XCTAssertEqual(held.totalCostKRW, 150_000_000)
+
+        // 전송 자체로는 처분이 잡히지 않는다
+        XCTAssertTrue(replay.disposals.isEmpty)
+    }
+
+    /// 지갑 처리를 하지 않으면 원가가 소멸한다 — 위 테스트의 대조군
+    func testWithoutWalletMoveCostIsAbandoned() throws {
+        let (ctx, project, ps) = try makeProject()
+        let binance = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "binance" })
+        let pid = ProjectID(project.id)
+        var buy = LedgerEvent(
+            projectID: pid, accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2026, month: 3, day: 1),
+            type: .buy, baseAsset: AssetSymbol("BTC"), quoteAsset: AssetSymbol("KRW"),
+            quantity: 1, quoteAmountKRW: 100_000_000, sourceKind: "t", rawRef: "r1"
+        )
+        buy.fingerprint = "fp-buy"
+        var out = LedgerEvent(
+            projectID: pid, accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2026, month: 4, day: 1),
+            type: .withdrawal, baseAsset: AssetSymbol("BTC"), quantity: -1,
+            sourceKind: "t", rawRef: "r2"
+        )
+        out.fingerprint = "fp-out"
+        for e in [buy, out] {
+            let entity = EntityMappers.makeEntity(from: e)
+            entity.project = project
+            project.events.append(entity)
+            ctx.insert(entity)
+        }
+        try ctx.save()
+
+        let accounts = ps.domainAccounts(for: project)
+        let engine = CostBasisEngine(
+            policies: .v1Default,
+            accountsByID: Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
+            fxRates: [:], marketPrices: ["BTC": 150_000_000]
+        )
+        let replay = try engine.replay(events: ps.domainEvents(for: project), links: [])
+        XCTAssertEqual(replay.abandonedTotal, 100_000_000, "미매칭 출금은 원가가 소멸한다")
+        XCTAssertTrue(replay.holdings.rows.isEmpty, "보유 현황에서 사라진다")
+    }
+
+    /// 네트워크 수수료만큼 덜 도착한 경우 그 몫만 소멸한다
+    func testWalletMoveWithNetworkFee() throws {
+        let (ctx, project, ps) = try makeProject()
+        let binance = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "binance" })
+        let pid = ProjectID(project.id)
+        var buy = LedgerEvent(
+            projectID: pid, accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2027, month: 3, day: 1),
+            type: .buy, baseAsset: AssetSymbol("USDT"), quoteAsset: AssetSymbol("KRW"),
+            quantity: 100, quoteAmountKRW: 140_000, sourceKind: "t", rawRef: "r1"
+        )
+        buy.fingerprint = "fp-buy"
+        var out = LedgerEvent(
+            projectID: pid, accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2027, month: 4, day: 1),
+            type: .withdrawal, baseAsset: AssetSymbol("USDT"), quantity: -100,
+            sourceKind: "t", rawRef: "r2"
+        )
+        out.fingerprint = "fp-out"
+        for e in [buy, out] {
+            let entity = EntityMappers.makeEntity(from: e)
+            entity.project = project
+            project.events.append(entity)
+            ctx.insert(entity)
+        }
+        try ctx.save()
+
+        let matching = MatchingService(modelContext: ctx)
+        let withdrawal = try XCTUnwrap(project.events.first { $0.type == "withdrawal" })
+        try matching.moveToWallet(withdrawal: withdrawal, project: project, receivedQty: 99)
+
+        let accounts = ps.domainAccounts(for: project)
+        let engine = CostBasisEngine(
+            policies: .v1Default,
+            accountsByID: Dictionary(accounts.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a }),
+            fxRates: [:], marketPrices: [:]
+        )
+        let replay = try engine.replay(events: ps.domainEvents(for: project), links: ps.domainLinks(for: project))
+        let wallet = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "wallet" })
+        let held = try XCTUnwrap(replay.holdings.rows.first { $0.accountID?.raw == wallet.id })
+        XCTAssertEqual(held.quantity, 99)
+        XCTAssertEqual(held.totalCostKRW, Decimal(string: "138600")!, "140,000 × 99/100")
+        XCTAssertEqual(replay.abandonedTotal, 1_400, "소실 1 USDT 분 원가만 소멸 (보수 정책)")
+    }
+
+    /// 연결을 풀면 자동으로 만든 지갑 입고 이벤트도 사라져야 한다.
+    /// 남겨두면 「출처 없는 입금 = 취득가 0원」이 원장에 그대로 남는다.
+    func testUnlinkRemovesGeneratedWalletDeposit() throws {
+        let (ctx, project, _) = try makeProject()
+        let binance = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "binance" })
+        var out = LedgerEvent(
+            projectID: ProjectID(project.id), accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2027, month: 4, day: 1),
+            type: .withdrawal, baseAsset: AssetSymbol("BTC"), quantity: -1,
+            sourceKind: "t", rawRef: "r1"
+        )
+        out.fingerprint = "fp-out"
+        let entity = EntityMappers.makeEntity(from: out)
+        entity.project = project
+        project.events.append(entity)
+        ctx.insert(entity)
+        try ctx.save()
+
+        let matching = MatchingService(modelContext: ctx)
+        try matching.moveToWallet(withdrawal: entity, project: project)
+        XCTAssertEqual(project.events.count, 2)
+        XCTAssertEqual(project.links.count, 1)
+
+        try matching.unlink(try XCTUnwrap(project.links.first), project: project)
+        XCTAssertEqual(project.events.count, 1, "생성된 지갑 입고가 남으면 취득가 0원 입금이 된다")
+        XCTAssertTrue(project.links.isEmpty)
+    }
+
+    func testWalletMoveRejectsInvalidInput() throws {
+        let (ctx, project, _) = try makeProject()
+        let binance = try XCTUnwrap(project.accounts.first { $0.exchangeCode == "binance" })
+        var dep = LedgerEvent(
+            projectID: ProjectID(project.id), accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2027, month: 4, day: 1),
+            type: .deposit, baseAsset: AssetSymbol("BTC"), quantity: 1,
+            sourceKind: "t", rawRef: "r1"
+        )
+        dep.fingerprint = "fp-dep"
+        let entity = EntityMappers.makeEntity(from: dep)
+        entity.project = project
+        project.events.append(entity)
+        ctx.insert(entity)
+        try ctx.save()
+
+        let matching = MatchingService(modelContext: ctx)
+        XCTAssertThrowsError(try matching.moveToWallet(withdrawal: entity, project: project), "입금은 지갑 이동 대상이 아니다")
+
+        // 도착 수량이 출금 수량보다 크면 거부
+        var out = LedgerEvent(
+            projectID: ProjectID(project.id), accountID: AccountID(binance.id),
+            timestamp: TaxTime.dateKST(year: 2027, month: 4, day: 2),
+            type: .withdrawal, baseAsset: AssetSymbol("BTC"), quantity: -1,
+            sourceKind: "t", rawRef: "r2"
+        )
+        out.fingerprint = "fp-out"
+        let outEntity = EntityMappers.makeEntity(from: out)
+        outEntity.project = project
+        project.events.append(outEntity)
+        ctx.insert(outEntity)
+        try ctx.save()
+        XCTAssertThrowsError(try matching.moveToWallet(withdrawal: outEntity, project: project, receivedQty: 2))
+
+        // 한 번 처리한 출금은 다시 처리할 수 없다
+        try matching.moveToWallet(withdrawal: outEntity, project: project)
+        XCTAssertThrowsError(try matching.moveToWallet(withdrawal: outEntity, project: project))
+    }
+}
+
 // MARK: - A-08 한국은행 인증키로 채운 환율이 「참고 시세」로 표시되면 안 된다
 
 final class FXSourceTagTests: XCTestCase {

@@ -59,6 +59,7 @@ enum ImportRouter {
         case .binance: return "바이낸스"
         case .okx: return "OKX"
         case .generic: return "기타"
+        case .wallet: return "개인지갑"
         }
     }
 }

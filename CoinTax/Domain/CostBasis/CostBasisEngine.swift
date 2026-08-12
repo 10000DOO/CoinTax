@@ -474,7 +474,7 @@ struct CostBasisEngine {
                         warnings.append("미매칭 출금 원가 소멸: \(e.baseAsset.code) \(Money.decimalString(wQty))")
                         issues.append(.init(
                             id: "V-QTY-04", severity: "warning",
-                            message: "연결되지 않은 출금의 취득원가는 소멸 처리됩니다 (세액이 커지는 방향) — 다른 거래소로 보낸 것이면 상대 입금을 연결하세요. 개인지갑으로 보낸 것이면 아직 처분하지 않은 자산이므로 보유 현황에서 빠집니다",
+                            message: "연결되지 않은 출금의 취득원가는 소멸 처리됩니다 (세액이 커지는 방향) — 다른 거래소로 보낸 것이면 상대 입금을 연결하고, 개인지갑으로 보낸 것이면 「전송 연결」 화면에서 개인지갑으로 지정하세요 (지정하지 않으면 보유 현황에서도 빠집니다)",
                             context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp))"
                         ))
                         if !e.quantityIsNetOfFee, let fee = e.feeAmount, fee > 0 {
