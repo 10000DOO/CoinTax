@@ -76,6 +76,7 @@ struct HoldingsView: View {
             do {
                 let result = try await env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
                 env.lastCalculation = result
+                env.calculationStale = false
                 message = "갱신 · 검증 \(result.verification.status)"
             } catch {
                 message = error.localizedDescription

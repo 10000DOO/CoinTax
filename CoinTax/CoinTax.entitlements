@@ -4,7 +4,9 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<true/>
-	<key>com.apple.security.files.user-selected.read-only</key>
+	<!-- 리포트 CSV/PDF 를 사용자가 고른 위치에 저장해야 하므로 read-write 가 필요하다.
+	     read-only 로는 저장 대화상자에서 고른 파일에 쓸 수 없다 (리뷰 2-1). -->
+	<key>com.apple.security.files.user-selected.read-write</key>
 	<true/>
 	<key>com.apple.security.network.client</key>
 	<true/>

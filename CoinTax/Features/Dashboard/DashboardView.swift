@@ -6,6 +6,8 @@ struct DashboardView: View {
     @State private var message = ""
     @State private var projects: [ProjectEntity] = []
     @State private var newName = ""
+    /// 화면 본문에서 매번 계산하면 전체 이벤트를 변환한다 (리뷰 6-2)
+    @State private var missingFX: [String] = []
 
     var body: some View {
         ScrollView {
@@ -45,13 +47,9 @@ struct DashboardView: View {
                         LabeledContent("원본 파일", value: "\(p.sourceFiles.count)개")
                     }
 
-                    let missingFX = env.fxService.missingDays(
-                        for: env.projectService.domainEvents(for: p),
-                        project: p
-                    )
                     if !missingFX.isEmpty {
                         GroupBox("환율 누락") {
-                            Text(missingFX.joined(separator: ", "))
+                            Text("\(missingFX.count)일: " + missingFX.prefix(12).joined(separator: ", ") + (missingFX.count > 12 ? " …" : ""))
                                 .foregroundStyle(.orange)
                             Text("자동 조회가 켜져 있으면 계산 시 채웁니다. 설정에서 수동/CSV도 가능합니다.")
                                 .font(.caption)
@@ -88,7 +86,18 @@ struct DashboardView: View {
             .padding()
             .frame(maxWidth: .infinity, alignment: .topLeading)
         }
-        .onAppear { reloadProjects() }
+        .onAppear {
+            reloadProjects()
+            refreshMissingFX()
+        }
+    }
+
+    private func refreshMissingFX() {
+        guard let p = env.currentProject else {
+            missingFX = []
+            return
+        }
+        missingFX = env.fxService.missingDays(for: env.projectService.domainEvents(for: p), project: p)
     }
 
     private func reloadProjects() {
@@ -118,6 +127,8 @@ struct DashboardView: View {
             do {
                 let result = try await env.pipeline.calculate(project: project, taxYear: project.defaultTaxYear)
                 env.lastCalculation = result
+                env.calculationStale = false
+                refreshMissingFX()
                 message = "계산 완료 — \(result.verification.status)"
             } catch {
                 message = error.localizedDescription

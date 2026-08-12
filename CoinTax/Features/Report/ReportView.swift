@@ -17,9 +17,16 @@ struct ReportView: View {
                     Stepper("과세연도 \(taxYear)", value: $taxYear, in: 2027...2035)
                     Button("계산") { runCalc() }
                     Button("CSV 내보내기") { exportCSV() }
-                        .disabled(!(env.lastCalculation?.verification.isExportAllowed ?? false))
+                        .disabled(!canExport)
                     Button("PDF 내보내기") { exportPDF() }
-                        .disabled(!(env.lastCalculation?.verification.isExportAllowed ?? false))
+                        .disabled(!canExport)
+                }
+                if env.calculationStale {
+                    Text("가져온 자료나 전송 연결이 바뀌었습니다 — 재계산 전까지 아래 숫자는 낡은 결과이고 내보내기가 잠깁니다.")
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.orange)
+                        .padding(10)
+                        .background(Color.orange.opacity(0.12), in: RoundedRectangle(cornerRadius: 8))
                 }
                 if let c = env.lastCalculation {
                     let s = c.summary
@@ -75,23 +82,55 @@ struct ReportView: View {
                         }
                     }
 
-                    GroupBox("의제 취득가") {
+                    GroupBox("의제 취득가 (\(DeemedBasisMode(rawValue: s.deemedBasisMode)?.label ?? s.deemedBasisMode))") {
                         if s.deemed.isEmpty {
                             Text("해당 없음")
                         } else {
                             ForEach(Array(s.deemed.enumerated()), id: \.offset) { _, d in
-                                Text("\(d.asset.code) qty=\(Money.decimalString(d.quantity)) 장부=\(Money.decimalString(d.bookUnitKRW)) 시가=\(d.marketUnitKRW.map { Money.decimalString($0) } ?? "-") 의제=\(Money.decimalString(d.deemedUnitKRW)) (\(d.reason))")
+                                Text("\(d.asset.code) qty=\(Money.decimalString(d.quantity)) 장부=\(Money.decimalString(d.bookUnitKRW)) 시가=\(d.marketUnitKRW.map { Money.decimalString($0) } ?? "-") 의제=\(Money.decimalString(d.deemedUnitKRW)) (\(d.reason), lot \(d.lotCount))")
                                     .font(.caption.monospaced())
+                            }
+                            LabeledContent("의제 취득가 합계", value: Money.decimalString(Money.roundKRW(s.totalDeemedCostKRW)) + " 원")
+                            if let alt = s.deemedAlternative {
+                                Divider()
+                                Text("다른 방식(\(alt.basisLabel))으로 계산하면")
+                                    .font(.caption.weight(.semibold))
+                                Text("의제 취득가 \(Money.decimalString(Money.roundKRW(alt.totalDeemedCostKRW))) · 소득 \(Money.decimalString(Money.roundKRW(alt.netIncomeKRW))) · 예상 세액 \(Money.decimalString(Money.roundKRW(alt.totalTaxKRW))) 원")
+                                    .font(.caption.monospaced())
+                                let diff = alt.totalTaxKRW - s.totalTaxKRW
+                                if diff != 0 {
+                                    Text("→ 세액 차이 \(Money.decimalString(Money.roundKRW(diff))) 원. 어느 방식이 맞는지는 세무 확인 대기 항목입니다 (세무 확인 화면 TQ-01).")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                }
                             }
                         }
                     }
+                    if !s.fxSources.isEmpty {
+                        GroupBox("적용 환율 출처") {
+                            ForEach(Array(s.fxSources.enumerated()), id: \.offset) { _, note in
+                                Text(note).font(.caption.monospaced())
+                            }
+                            Text("휴일·미고시일은 국세청 서삼46015-11986 취지에 따라 직전 고시일 환율을 적용하고 그 고시일을 함께 기록합니다.")
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+
                     GroupBox("검증 이슈") {
                         if c.verification.issues.isEmpty {
                             Text("없음")
                         } else {
-                            ForEach(c.verification.issues) { issue in
-                                Text("[\(issue.severity)] \(issue.id): \(issue.message)")
-                                    .foregroundStyle(issue.severity == "critical" ? .red : .primary)
+                            // 같은 검증 ID가 여러 건 나올 수 있어 offset 을 식별자로 쓴다 (리뷰 4-6)
+                            ForEach(Array(c.verification.issues.enumerated()), id: \.offset) { _, issue in
+                                VStack(alignment: .leading, spacing: 1) {
+                                    Text("[\(issue.severity)] \(issue.id): \(issue.message)")
+                                        .foregroundStyle(issue.severity == "critical" ? .red : .primary)
+                                    if let ctx = issue.context, !ctx.isEmpty {
+                                        Text(ctx).font(.caption2).foregroundStyle(.secondary)
+                                    }
+                                }
+                                .font(.caption)
                             }
                         }
                     }
@@ -99,6 +138,27 @@ struct ReportView: View {
                         ForEach(Array(s.disclaimers.enumerated()), id: \.offset) { i, d in
                             Text("\(i + 1). \(d)")
                                 .font(.caption)
+                                .padding(.bottom, 2)
+                        }
+                    }
+                    GroupBox("세무 확인이 필요한 항목 (\(TaxOpenQuestions.needsConfirmation.count)건)") {
+                        Text("아래 항목은 확정된 해석이 없어 앱이 가정을 두고 계산했습니다. 신고 전 「세무 확인」 화면에서 내용을 확인하세요.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        ForEach(TaxOpenQuestions.needsConfirmation.filter { $0.weight == .high }) { q in
+                            Text("• [\(q.id)] \(q.title)")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                        Text("그 외 \(TaxOpenQuestions.all.count - TaxOpenQuestions.needsConfirmation.filter { $0.weight == .high }.count)건은 「세무 확인」 화면에 있습니다.")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                    }
+                    GroupBox("주의사항") {
+                        ForEach(Array(TaxCopy.notices.enumerated()), id: \.offset) { _, n in
+                            Text("• \(n)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                                 .padding(.bottom, 2)
                         }
                     }
@@ -119,6 +179,12 @@ struct ReportView: View {
         }
     }
 
+    /// 낡은 결과로는 내보내지 않는다
+    private var canExport: Bool {
+        guard !env.calculationStale else { return false }
+        return env.lastCalculation?.verification.isExportAllowed ?? false
+    }
+
     private func runCalc() {
         guard let project = env.currentProject else { return }
         message = "계산 중… (환율 자동 조회 포함)"
@@ -126,6 +192,7 @@ struct ReportView: View {
             do {
                 let result = try await env.pipeline.calculate(project: project, taxYear: taxYear)
                 env.lastCalculation = result
+                env.calculationStale = false
                 message = "계산 완료 — \(result.verification.status)"
             } catch {
                 message = "계산 오류: \(error.localizedDescription)"

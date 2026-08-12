@@ -17,6 +17,7 @@ struct ImportView: View {
     @State private var showGenericSheet = false
     @State private var pdfPassword = ""
     @State private var showPDFPassword = false
+    @State private var genericTimeZone = "UTC"
 
     var body: some View {
         ScrollView {
@@ -85,6 +86,11 @@ struct ImportView: View {
                                     Text(f.fileName)
                                     Spacer()
                                     Text(f.format).foregroundStyle(.secondary)
+                                    if let excluded = Self.excludedCount(f.metaJSON), excluded > 0 {
+                                        Text("제외 \(excluded)건")
+                                            .font(.caption2)
+                                            .foregroundStyle(.orange)
+                                    }
                                     Text(f.parserID)
                                         .font(.caption)
                                         .padding(.horizontal, 6)
@@ -108,15 +114,18 @@ struct ImportView: View {
         .sheet(isPresented: $showGenericSheet) {
             GenericMappingSheet(
                 headers: genericHeaders,
-                onConfirm: { map in
+                onConfirm: { map, tz in
                     showGenericSheet = false
+                    genericTimeZone = tz
                     if let url = pendingURL {
-                        runImport(url: url, forceGeneric: true, columnMap: map)
+                        runImport(url: url, forceGeneric: true, columnMap: map, timeZone: tz)
+                        Self.discard(url)
                     }
                     pendingURL = nil
                 },
                 onCancel: {
                     showGenericSheet = false
+                    if let url = pendingURL { Self.discard(url) }
                     pendingURL = nil
                 }
             )
@@ -126,11 +135,17 @@ struct ImportView: View {
                 Text("PDF 비밀번호").font(.headline)
                 SecureField("비밀번호", text: $pdfPassword)
                 HStack {
-                    Button("취소") { showPDFPassword = false; pendingURL = nil }
+                    Button("취소") {
+                        showPDFPassword = false
+                        pdfPassword = ""   // 비밀번호를 화면 상태에 남기지 않는다
+                        if let url = pendingURL { Self.discard(url) }
+                        pendingURL = nil
+                    }
                     Button("열기") {
                         showPDFPassword = false
                         if let url = pendingURL {
                             runImport(url: url, forceGeneric: false, columnMap: [:], pdfPassword: pdfPassword)
+                            Self.discard(url)
                         }
                         pdfPassword = ""
                         pendingURL = nil
@@ -196,31 +211,20 @@ struct ImportView: View {
                     message = "헤더를 읽지 못했습니다"
                     return
                 }
-                pendingURL = url
-                // Keep security-scoped access by copying to temp
-                let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                try? FileManager.default.removeItem(at: tmp)
-                try FileManager.default.copyItem(at: url, to: tmp)
-                pendingURL = tmp
+                pendingURL = try Self.stageCopy(of: url)
                 showGenericSheet = true
                 return
             }
 
             if url.pathExtension.lowercased() == "pdf",
                let doc = PDFDocument(url: url), doc.isLocked {
-                pendingURL = {
-                    let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-                    try? FileManager.default.removeItem(at: tmp)
-                    try? FileManager.default.copyItem(at: url, to: tmp)
-                    return tmp
-                }()
+                pendingURL = try Self.stageCopy(of: url)
                 showPDFPassword = true
                 return
             }
 
-            let tmp = FileManager.default.temporaryDirectory.appendingPathComponent(url.lastPathComponent)
-            try? FileManager.default.removeItem(at: tmp)
-            try FileManager.default.copyItem(at: url, to: tmp)
+            let tmp = try Self.stageCopy(of: url)
+            defer { Self.discard(tmp) }
             runImport(url: tmp, forceGeneric: false, columnMap: [:])
         } catch {
             message = "오류: \(error.localizedDescription)"
@@ -232,26 +236,20 @@ struct ImportView: View {
         url: URL,
         forceGeneric: Bool,
         columnMap: [String: String],
+        timeZone: String = "UTC",
         pdfPassword: String? = nil
     ) {
         guard let project = env.currentProject,
               let accID = selectedAccountID,
               let account = project.accounts.first(where: { $0.id == accID }) else { return }
         do {
-            if let pw = pdfPassword, !pw.isEmpty,
-               let doc = PDFDocument(url: url), doc.isLocked {
-                guard doc.unlock(withPassword: pw) else {
-                    throw CoinTaxError.parserReject("PDF 비밀번호를 확인하세요")
-                }
-                // Write unlocked is not trivial; Bithumb parser opens via PDFKit with password path
-                // Store password-unlocked text path: re-parse after unlock in place
-            }
             let outcome = try env.importService.importFile(
                 url: url,
                 project: project,
                 account: account,
                 forceParserID: forceGeneric ? "generic-tabular-v1" : nil,
                 genericColumnMap: columnMap,
+                genericTimeZone: timeZone,
                 pdfPassword: pdfPassword
             )
             lastWarnings = outcome.parseResult.warnings
@@ -259,13 +257,43 @@ struct ImportView: View {
             lastPreview = project.events
                 .filter { $0.sourceFileID == outcome.sourceFileID }
                 .sorted { $0.timestamp > $1.timestamp }
+            if outcome.inserted > 0 { env.invalidateCalculation() }
             message = "가져옴 \(outcome.inserted)건, 중복 \(outcome.skippedDupe)건, 제외 \(outcome.parseResult.ignoredCount)건 (\(outcome.parseResult.parserID))"
         } catch {
             message = "오류: \(error.localizedDescription)"
             lastErrors = [error.localizedDescription]
-            if error.localizedDescription.contains("비밀번호") || (error as? CoinTaxError)?.code == "E_PARSER_REJECT" {
-                // already set
-            }
+        }
+    }
+
+    // MARK: - 임시 사본 관리
+    //
+    // 사용자가 고른 파일에는 성명·계좌·주소가 들어 있다. 작업용 사본을 임시 폴더에
+    // 남겨두면 안 된다 (docs/IMPLEMENTATION.md §9 PII 최소 저장 · 리뷰 4-4).
+
+    /// F-CB-06 「선물 등 제외 N건」을 파일 목록에 지속 노출
+    private static func excludedCount(_ metaJSON: String) -> Int? {
+        guard let data = metaJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
+              let raw = obj["ignoredCount"] else { return nil }
+        return Int(raw)
+    }
+
+    private static func stageCopy(of url: URL) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CoinTaxImport-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let dest = dir.appendingPathComponent(url.lastPathComponent)
+        try FileManager.default.copyItem(at: url, to: dest)
+        return dest
+    }
+
+    private static func discard(_ url: URL) {
+        // 사본이 담긴 전용 폴더째로 지운다
+        let dir = url.deletingLastPathComponent()
+        if dir.lastPathComponent.hasPrefix("CoinTaxImport-") {
+            try? FileManager.default.removeItem(at: dir)
+        } else {
+            try? FileManager.default.removeItem(at: url)
         }
     }
 }

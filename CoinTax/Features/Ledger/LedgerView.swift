@@ -8,6 +8,8 @@ struct LedgerView: View {
     @State private var filterAsset: String = "전체"
     @State private var fromDate = Calendar.current.date(byAdding: .year, value: -3, to: Date()) ?? Date()
     @State private var toDate = Date()
+    /// 렌더링마다 전체 목록을 필터·정렬하면 대용량에서 느려진다 (리뷰 6-2) → 필터 변경 시에만 재계산
+    @State private var rows: [LedgerEventEntity] = []
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -48,12 +50,11 @@ struct LedgerView: View {
                 }
                 .pickerStyle(.segmented)
 
-                let filtered = filteredEvents(project)
-                Text("\(filtered.count)건")
+                Text("\(rows.count)건")
                     .font(.caption)
                     .foregroundStyle(.secondary)
 
-                List(filtered, id: \.id) { e in
+                List(rows, id: \.id) { e in
                     HStack {
                         Text(e.timestamp.formatted(date: .abbreviated, time: .shortened))
                             .frame(width: 140, alignment: .leading)
@@ -73,6 +74,21 @@ struct LedgerView: View {
             Spacer()
         }
         .padding()
+        .onAppear { reload() }
+        .onChange(of: filterAccountID) { _, _ in reload() }
+        .onChange(of: filterExchange) { _, _ in reload() }
+        .onChange(of: filterAsset) { _, _ in reload() }
+        .onChange(of: filterType) { _, _ in reload() }
+        .onChange(of: fromDate) { _, _ in reload() }
+        .onChange(of: toDate) { _, _ in reload() }
+    }
+
+    private func reload() {
+        guard let project = env.currentProject else {
+            rows = []
+            return
+        }
+        rows = filteredEvents(project)
     }
 
     private func assets(in project: ProjectEntity) -> [String] {
