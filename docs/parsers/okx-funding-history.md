@@ -66,7 +66,7 @@ timestamp = Time + meta timezone
 | Withdrawal, To unified… | 보유 − |
 | Fee rebate | + (income) |
 
-- Withdrawal: Amount가 이미 음수 (`-1.635673`) → abs로 qty, type=withdrawal.  
+- Withdrawal: Amount가 이미 음수 (`-1.500000`) → abs로 qty, type=withdrawal.  
 - **외부 브릿지 매칭** 후보: 주로 `Deposit` / `Withdrawal` (및 필요 시 `Received`).  
 - `From/To unified trading account`: **거래소 내부** 펀딩↔통합거래 이동.  
   - 빗썸↔OKX 매칭에 쓰지 않음.  

@@ -62,5 +62,4 @@
 
 ## 저장소
 
-- 로컬: `/Users/10000doo/Project/CoinTax`  
-- 원격: `https://github.com/10000DOO/CoinTax.git`
+로컬 개인 사용 프로젝트. 실거래 원본은 커밋하지 않는다 (`.gitignore` 참조).

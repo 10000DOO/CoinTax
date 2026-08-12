@@ -46,7 +46,7 @@
 | [../04-import-formats.md](../04-import-formats.md) | Import 포맷 |
 | [../05-decisions.md](../05-decisions.md) | 결정 |
 | [../06-integrity.md](../06-integrity.md) | 검증 전문 |
-| [../02-design.md](./02-design.md) | 요약 포인터 |
+| [../02-design.md](../02-design.md) | 요약 포인터 |
 
 ## 설계 버전
 

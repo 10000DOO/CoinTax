@@ -19,7 +19,7 @@
 | A | `Date(UTC+0)` | 출금 시각 UTC | `25-12-21 00:51:45` |
 | B | `Coin` | 자산 | `BTC` |
 | C | `Network` | 네트워크 | `BTC` |
-| D | `Amount` | 출금 수량 (수수료 별도인 경우가 많음) | `0.020485` |
+| D | `Amount` | 출금 수량 (수수료 별도인 경우가 많음) | `0.010000` |
 | E | `Fee` | 네트워크/출금 수수료 | `0.000015` |
 | F | `Address` | 수신 주소 | (민감) |
 | G | `TXID` | 온체인 해시 | (민감) |
@@ -31,6 +31,19 @@
 
 - 값이 `YY-MM-DD HH:mm:ss` 형태 (`25-12-21 …`) — **연도 2자리**.  
 - 파서: `20YY` 가정 또는 명시 포맷 `yy-MM-dd HH:mm:ss` (UTC).
+
+---
+
+## 1.9 변형 B — 입출금 화면 CSV (실측 2026-08-12)
+
+```text
+Time,Coin,Network,Amount,Fee,Address,TXID,Status
+```
+
+- 날짜 열 이름이 `Date(UTC+0)` 이 아니라 **`Time`** 이고, 타임존은 **파일명 `…(UTC+9)…`** 에만 있다.
+- 줄바꿈은 **CRLF**.
+- 파서는 `Date(UTC+0)` → `Date(UTC)` → `Time` 순으로 날짜 열을 찾고,
+  열 이름에 타임존이 없으면 파일명에서, 그것도 없으면 UTC 로 두고 **경고**한다.
 
 ---
 
@@ -71,12 +84,12 @@
 |------|------|
 | Spot Trade History | 현물 체결 buy/sell |
 | **Withdraw History** | 거래소 → 외부 **출금** |
-| Deposit History | 외부 → 거래소 **입금** (**아직 샘플 없음**) |
+| Deposit History | 외부 → 거래소 **입금** (실측·파서 구현 완료) |
 
 전송 매칭 예:
 
 ```text
-빗썸 USDT/BTC 출금  ──?──►  바이낸스 Deposit   (입금 파일 필요)
+빗썸 USDT/BTC 출금  ──match──►  바이낸스 Deposit  (Deposit History import 시)
 바이낸스 Withdraw   ──?──►  개인지갑 / 타소 입금
 빗썸 출금(바이낸스) ──match──► 바이낸스 Deposit   ← 브릿지 핵심
 ```

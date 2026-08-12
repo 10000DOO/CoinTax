@@ -13,9 +13,14 @@
 
 ```text
 2026-12-31(KST) 스냅샷 보유에 대해
-  deemedUnit = max(bookUnitCost, marketUnitPrice)
+  [기본] positionAverage : deemedUnit = max(보유 평균 단가, 시가)
+  [선택] perLot          : lot 마다 max(lot 단가, 시가) → lot 구성 그대로 재기동
 2027-01-01 이후 원장을 deemed 기준으로 재기동
 ```
+
+비교 단위는 세무 확인 대기 항목(TQ-01)이므로 **두 방식을 모두 구현**하고,
+채택하지 않은 방식의 결과(의제취득가 합계·소득·세액)를 `TaxYearSummary.deemedAlternative` 로 항상 함께 계산해
+리포트와 설정에 차이를 표시한다. 이동평균 계정은 lot 개념이 없어 두 방식 결과가 같다.
 
 ### 1.2 알고리즘
 

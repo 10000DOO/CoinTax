@@ -28,7 +28,7 @@
 │ 바이낸스     │►│  Ledger · Tax · Verify · Holdings    │ │ (검증 후)   │
 │ Spot XLSX    │ │  Policy plugins · Local SwiftData    │ └─────────────┘
 │ OKX History  │►└──────────────────┬──────────────────┘
-│ CSV          │                    │ (옵트인 FX)
+│ CSV          │                    │ (FX 자동 조회)
 └──────────────┘                    ▼
                          ┌─────────────────────┐
                          │ 기준환율 공개 데이터  │
@@ -53,7 +53,7 @@
 | 1 | **정합성(세금)** | Calculate → Verify → Publish; Decimal; 정책 ID 감사 |
 | 2 | **감사 가능성** | 원본 행·환율·의제·정책 버전 추적 |
 | 3 | **정책 교체 용이** | 전송 수수료 등 Strategy 플러그인 |
-| 4 | **프라이버시** | 거래 원본 비전송; 환율만 옵트인 |
+| 4 | **프라이버시** | 거래 원본 비전송; 네트워크는 환율 날짜·통화쌍 조회만 |
 | 5 | **확장** | `ExchangeDocumentParser` (PDF/XLSX/CSV) |
 | 6 | **단순 배포** | 단일 앱 타깃, 로컬 실행 |
 
@@ -90,7 +90,7 @@
 ## 5. 핵심 런타임 파이프라인
 
 ```text
-[CSV files] → Import/Normalize → LedgerEvents
+[원본 파일 PDF|XLSX|CSV] → Import/Normalize → LedgerEvents
                     ↓
             Transfer Matching (user confirm)
                     ↓
@@ -154,7 +154,7 @@ TransferLink(confirmed): Bithumb.USDT out → Binance.USDT in
 | OS | macOS 15.0+ |
 | UI | SwiftUI |
 | 저장 | SwiftData (Application Support) |
-| 네트워크 | 기본 OFF; FX fetch 옵트인 |
+| 네트워크 | **환율 자동 조회 기본 ON** (설정에서 해제 가능). 거래 원본은 전송하지 않음 |
 | 배포 | 로컬 빌드 개인 사용 |
 
 ---

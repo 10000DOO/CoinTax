@@ -32,7 +32,7 @@
 | 6 | [design/06-cost-basis-engine.md](./design/06-cost-basis-engine.md) + [07](./design/07-tax-deemed-holdings.md) | 원가·세금 |
 | 7 | [design/09-import-and-matching.md](./design/09-import-and-matching.md) | Import·매칭 |
 | 8 | [06-integrity.md](./06-integrity.md) | 검증 |
-| 9 | [design/14-implementation-spec.md](./design/14-implementation-spec.md) | **알고리즘·고든·에러코드 상세** |
+| 9 | [design/14-implementation-spec.md](./design/14-implementation-spec.md) | **알고리즘·골든·에러코드 상세** |
 | 10 | [01-requirements.md](./01-requirements.md) §10 | MVP 수용 기준 |
 | 11 | 나머지 design/* | UI·저장·로드맵 |
 
@@ -51,15 +51,22 @@
 | 전송 소실 고지 | 아래 §2.1 문구 **그대로** (`TaxCopy.transferCost`) |
 | USDT | v1 **1 USDT = 1 USD**, 당일 **USD/KRW 기준환율** |
 | 과세 시작 | 2027-01-01 00:00 **KST** |
-| 의제 기준 | 2026-12-31 24:00 **KST** 스냅샷 후 `max(장부단가, 시가)` |
+| 의제 기준 | 2026-12-31 24:00 **KST** 스냅샷 후 `max(장부단가, 시가)`. 비교 단위는 **보유 전체 평균이 기본**, 설정에서 **매입 건별** 전환 가능 (세무 확인 대기 TQ-01 — 두 방식 결과를 항상 함께 표시) |
 | 기본공제 | 2_500_000 KRW |
 | 국세/지방 | 20% / 2% (과세표준 기준) |
 | 선물 | import 시 **제외** + 건수 고지 |
 | 빗썸 이자 원천징수 PDF | **거부** (거래내역 아님) |
 | Decimal | `Decimal` / `NSDecimalNumber` only. Double 금지 |
-| 네트워크 | 환율 **자동 조회 기본 ON**, 수동 입력은 옵션 (끄면 수동만) |
+| 네트워크 | 환율 **자동 조회 기본 ON**. 원천은 **한국은행 ECOS 전용**(인증키 필요). 공개 시세 폴백은 **기본 차단**이며 켜면 리포트에 경고 표시 |
 | 휴일·미고시 환율 | **직전 고시일** 기준환율 (`FXHolidayPolicy` / 서삼46015-11986 취지), `sourceDate` 기록 |
 | 실원본 git | 금지 (`.gitignore` 준수) |
+| 수량 순액 규약 | 원본이 이미 수수료 차감 후 수량이면 `quantityIsNetOfFee = true` (OKX Balance Change). 바이낸스 `Amount` 는 차감 전 = false |
+| OKX Trading History Transfer | **내부 이동**(`transferInternal`). 외부 입출금은 Funding History 의 Deposit/Withdrawal |
+| 재고 부족·환산 불가 | 예외 금지. Critical 이슈로 보고하고 계산은 끝까지 진행 → 요약 `blocked` |
+| 환율 되짚기 | `FXHolidayPolicy` **한 곳에서만**. 원격 클라이언트는 고시 있는 날짜만 반환 |
+| 파일 중복 | 원본 바이트 SHA-256 일치 시 import 거부 (`E_DUPLICATE_FILE`) |
+| 총수입금액 | **총액 기준 통일**. 매도 수수료는 필요경비. 빗썸은 「거래금액」을 양도가액, (거래금액 − 정산금액)을 수수료로 분리 (세무 확인 대기 TQ-02) |
+| 세무 확인 항목 | `TaxOpenQuestions` 18건을 「세무 확인」 화면·CSV·PDF에 **항상 노출**. 가정을 코드에만 두지 않는다 |
 
 ### 2.1 필수 고지 문자열
 
@@ -144,19 +151,20 @@ SwiftUI Features
 ### 6.2 KRW 환산 우선순위
 
 1. `quoteAmountKRW` 또는 빗썸 정산금액 등 **이미 KRW**  
-2. `quoteAsset == USDT` (또는 USD): `amount × fxUSDJPY` → **USD/KRW** rate on **KST calendar day** of event  
+2. `quoteAsset == USDT` (또는 USD): `amount × USD/KRW 기준환율` (이벤트의 **KST 달력일**)  
 3. 기타 코인 견적: 가능하면 거래 행의 quote를 USDT로 환산 후 2; 불가 시 `needsFX` / 누락  
 
 ### 6.3 매수 취득원가 KRW
 
-- 빗썸: **`abs(정산금액)`** (수수료 포함 유출)  
+- 빗썸: **`abs(정산금액)`** (수수료 포함 유출 — 총액 기준과 동일 효과)  
 - 해외 buy: `abs(quantity) × price × USDT→KRW` + 수수료 KRW 환산  
   - Fee Coin == base: 취득 수량 순액 감소 또는 원가에 가산 (v1: **수량 순취득 = amount − fee_in_base**, 원가 = quote 지출 전액 KRW)  
   - Fee Coin == BNB 등: BNB 장부에서 dispose 후 그 원가를 취득 부대비용에 가산; BNB 없으면 quote 환산 근사 + warning  
 
 ### 6.4 매도 양도가 KRW
 
-- 빗썸: **정산금액** (수수료 차감 후 유입, 양수)  
+- 빗썸: **거래금액**(총액)을 양도가액으로, `거래금액 − 정산금액` 을 수수료로 분리 (해외와 기준 통일).
+  거래금액 칸이 비면 정산금액으로 폴백 — 소득금액은 동일  
 - 해외 sell: `abs(qty)×price×FX − feeKRW`  
 
 ### 6.5 반올림 (잠금)
@@ -175,6 +183,8 @@ SwiftUI Features
 | 파라미터 | 값 |
 |----------|-----|
 | 시간 창 | 출금 시각 ± **72 hours** |
+| 후보 제시 범위 | 손실률 **50% 이내**까지 후보로 제시. 1% 창 밖은 점수를 깎고 「수수료 확인 필요」 표시. 소액 전송(수수료 비율 큼)을 후보에서 빼면 미매칭으로 원가가 소멸해 세액이 과대해진다 |
+| 무효 링크 | 출금·입금 이벤트가 없거나 수량이 0이면 링크를 채택하지 않고 `V-QTY-03` Critical. 채택하면 입금이 사라진다 |
 | 수량 | `abs(in) <= abs(out)` 이고 `abs(out)−abs(in) <= max(abs(out)*0.01, 1e-6)` 또는 출금 fee 별도 반영 |
 | 점수 | asset 필수 + 시간 가까울수록 + 국내→해외 + 비고 거래소명 + tx 유사 |
 | 확정 | 사용자 confirmed 만 원가 이전 |
@@ -223,11 +233,12 @@ deductibleExpense = 0
 [01-requirements.md](./01-requirements.md) §10 전체 + 아래:
 
 - [x] `PolicyBundle.id == "cointax-v1.0"` 리포트 표시  
-- [x] 고지 4종이 리포트·export에 포함  
+- [x] 고지 4종이 리포트·export에 포함 (PDF 다중 페이지로 잘림 없음)  
 - [x] G1 골든 (14-spec 수치) 테스트 통과  
 - [x] Critical verify 시 export 버튼 disabled  
+- [x] 적용 환율 출처(휴일 대체 시 실제 고시일)를 리포트·export에 표시  
 
-> 체크 갱신: 2026-08-11 (CoinTaxTests 30 pass).
+> 체크 갱신: 2026-08-11 (CoinTaxTests **55 pass**, 경고 0).
 
 ---
 

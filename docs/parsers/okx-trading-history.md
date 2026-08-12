@@ -64,6 +64,12 @@
 | Buy | base 수량 / BTC | +base / BTC | BTC 매수 취득 |
 | Sell | (큰 숫자) / BTC | −quote / USDT | USDT 지급 측 |
 
+> ⚠️ **`Balance Change` 가 수수료 차감 전인지 후인지는 실측으로 확정되지 않았다.**
+> 아래 §6 합성 예시의 숫자(0.01 − 0.00001 = 0.00999)는 문서 작성자가 만든 값이므로 관례의 근거가 될 수 없다.
+> 파서는 `Amount`·`Fee`·`Balance Change` 세 값의 관계로 **런타임 판정**한다
+> (`|Balance Change| ≈ Amount − Fee` → 순액 / `≈ Amount` → 총액 / 그 외 → 경고 후 총액 처리).
+> 실파일로 확인되면 이 문서에 실측 결과를 적고 판정 로직을 단순화할 수 있다.
+
 **파서 권장 (v1):**
 
 1. `Order id`로 그룹.  
@@ -79,13 +85,13 @@
 
 | Action | 정규화 |
 |--------|--------|
-| `Transfer in` | `deposit` |
-| `Transfer out` | `withdrawal` |
+| `Transfer in` | `transferInternal` (+) — 내부 이동 |
+| `Transfer out` | `transferInternal` (−) — 내부 이동 |
 
 - `Amount`가 0이어도 **`Balance Change` 절댓값 = 수량**.  
 - 자산 = `Balance Unit` (또는 Fee Unit과 동일 계열).  
 - `Symbol` 비어 있음.  
-- 전송 매칭: 이 행 ↔ 빗썸/바이낸스 입출금.
+- 전송 매칭에는 **쓰지 않는다** (내부 이동). 국내↔해외 매칭은 Funding History 의 Deposit/Withdrawal 담당.
 
 ---
 
@@ -95,8 +101,12 @@
 |---------------------|------|-----------------|-------|
 | Spot + Buy (base leg) | buy | Balance Change 또는 Amount | Balance Unit / base |
 | Spot + Sell (quote leg) | (buy의 대금 또는 sell) | Balance Change | quote |
-| Transfer in | deposit | abs(Balance Change) | Balance Unit |
-| Transfer out | withdrawal | abs(Balance Change) | Balance Unit |
+| Transfer in | **transferInternal** (+) | abs(Balance Change) | Balance Unit |
+| Transfer out | **transferInternal** (−) | abs(Balance Change) | Balance Unit |
+
+> Trading History 의 Transfer 는 **거래 계정 ↔ 펀딩 계정 내부 이동**이다 (OKX 는 외부 입출금이 펀딩 지갑에서 일어난다).
+> 외부 입출금은 Funding History 의 `Deposit`/`Withdrawal` 을 쓴다.
+> Funding History 없이 Trading History 만 가져오면 **국내↔해외 전송이 누락**되므로 검증기가 `V-IMP-04` Critical 로 차단한다.
 
 `externalID` = `id` (행) 또는 `Order id`+leg.
 

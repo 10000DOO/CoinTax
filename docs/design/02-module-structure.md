@@ -17,7 +17,64 @@
 
 ---
 
-## 2. 권장 소스 트리
+## 2. 실제 소스 트리 (2026-08-11 기준)
+
+> 아래는 **현재 저장소의 실제 파일 목록**이다. 설계상 분리를 예정했던 파일 중
+> 실제로는 하나로 합쳐진 것이 있으므로(예: MA/FIFO 는 `AssetBook.swift` 안에, 검증기는 `Verifier.swift` 하나로)
+> 이 문서를 정본으로 본다.
+
+```text
+CoinTax/
+├── App/
+│   ├── CoinTaxApp.swift                 # 저장소 열기 실패 시 메모리 모드 + 경고
+│   ├── AppEnvironment.swift             # DI 컨테이너
+│   └── Navigation/RootSplitView.swift
+├── Features/
+│   ├── Dashboard/DashboardView.swift
+│   ├── Import/ImportView.swift · GenericMappingSheet.swift
+│   ├── Ledger/LedgerView.swift
+│   ├── Matching/MatchingView.swift      # 후보·수동 연결·연결 해제
+│   ├── Holdings/HoldingsView.swift
+│   ├── Report/ReportView.swift
+│   └── Settings/SettingsView.swift
+├── Application/
+│   ├── ImportService.swift              # 파일 해시 중복 차단 포함
+│   ├── MatchingService.swift            # confirm / linkManually / unlink
+│   ├── CalculationPipeline.swift        # calc → verify → 스냅샷(최근 10개)
+│   ├── FXService.swift
+│   └── ProjectService.swift
+├── Domain/                              # 순수 — SwiftUI/SwiftData import 금지
+│   ├── Models/ Project · Account · LedgerEvent · TransferLink · Money
+│   │           Identifiers · TaxTime · TaxModels · FXAndMarket
+│   ├── Policies/ PolicyBundle · TransferCostPolicy ★ · CostMethodResolver
+│   │             DeemedCostPolicy · TaxRatePolicy · RoundingPolicy
+│   │             FXAssumptionPolicy · TaxCopy
+│   ├── CostBasis/ AssetBook.swift        # MovingAverageBook + FIFOBook + disposeClamped
+│   │              CostBasisEngine.swift  # replay 전체 루프 + 이슈 수집
+│   ├── Tax/TaxAggregator.swift
+│   ├── Holdings/HoldingsSnapshot.swift
+│   ├── FX/FXHolidayPolicy.swift          # 미고시일 → 직전 고시일 (단일 지점)
+│   └── Integrity/Verifier.swift          # V-* 전체
+├── Import/
+│   ├── Probe/FormatProbe.swift           # pdf 본문·xlsx 헤더까지 확인
+│   ├── Parsing/ ExchangeDocumentParser · ParserRegistry · ParseResult
+│   │            CSVUtil (headerIndex · stripBOM · readText) · Fingerprint · XLSXReader
+│   ├── Parsers/ Bithumb/ · Binance/(Spot·Deposit·Withdraw) · OKX/(Trading·Funding) · Generic/
+│   └── Matching/TransferMatchingEngine.swift   # 1:1 배정 · 거부 유지
+├── Data/
+│   ├── SwiftData/ ModelContainer+CoinTax.swift · Entities/Entities.swift
+│   └── Mappers/EntityMappers.swift
+└── Infrastructure/
+    ├── FX/ ECOSFXClient.swift (+ PublicUSDKRWClient · CompositeFXClient)
+    │        FXKeychain.swift · LocalFXCache.swift (FXClient · FXPreferences)
+    └── Export/ ReportCSVExporter.swift · ReportPDFExporter.swift (다중 페이지)
+```
+
+**Xcode 프로젝트는 file-system synchronized group 을 쓴다** — 폴더에 `.swift` 를 추가하면 자동 포함된다.
+
+---
+
+## 2.1 (참고) 초기 설계안 트리
 
 ```text
 CoinTax/

@@ -146,7 +146,7 @@ XLSX → Date(UTC+0), Coin, Network, Amount, Address, TXID, Status
 | Trade Type | Action | type |
 |------------|--------|------|
 | Spot | Buy/Sell (멀티레그) | buy/sell (그룹 합치기, 이중계산 금지) |
-| Transfer | Transfer in/out | deposit/withdrawal |
+| Transfer | Transfer in/out | **transferInternal** (거래↔펀딩 내부 이동) |
 
 - `Amount==0` 이어도 Transfer는 **Balance Change** 사용.  
 - 메타 Time Zone 적용 (예: UTC+8).
@@ -164,8 +164,8 @@ XLSX → Date(UTC+0), Coin, Network, Amount, Address, TXID, Status
 | From/To unified trading account | transferInternal (펀딩↔트레이딩) |
 | Fee rebate | income |
 
-- 외부 브릿지 매칭: **Deposit / Withdrawal** 우선.  
-- Trading History와 병행 import.  
+- 외부 브릿지 매칭: **Deposit / Withdrawal** — Trading History 의 Transfer 는 내부 이동이므로 쓰지 않는다.  
+- Trading History와 병행 import (같은 내부 이동이 양쪽에 찍혀도 이중 반영되지 않는다).  
 - 상세: [parsers/okx-funding-history.md](./parsers/okx-funding-history.md)
 
 ---
@@ -232,7 +232,7 @@ struct ParseResult {
         ├─ errors → 행/페이지 리포트
         ├─ ignored futures → 카운트
         ▼
-  Deduper (externalID / fingerprint)
+  Deduper — ① 파일 SHA-256 동일 → 거부  ② 내용키(행 번호 제외) 개수 비교 → 초과분만 삽입
         │
         ▼
   Persist LedgerEvent (+ SourceFile meta: format, parserId, sha256)

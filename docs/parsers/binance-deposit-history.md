@@ -17,7 +17,7 @@
 | A | `Date(UTC+0)` | 입금 시각 UTC | `25-12-25 13:59:10` |
 | B | `Coin` | 자산 | `USDT` |
 | C | `Network` | 네트워크 | `TRX`, `PLASMA` 등 |
-| D | `Amount` | 입금 수량 | `201.932416` |
+| D | `Amount` | 입금 수량 | `100.500000` |
 | E | `Address` | 수신 주소 | (민감) |
 | F | `TXID` | 온체인 해시 | (민감) |
 | G | `Status` | 상태 | `Completed` |
@@ -36,6 +36,19 @@
 - `yy-MM-dd HH:mm:ss` (연도 2자리) — Withdraw와 동일 주의.
 
 실측 샘플: USDT 입금 7건, Network TRX 다수 + PLASMA 1, Status 전부 Completed.
+
+---
+
+## 1.9 변형 B — 입출금 화면 CSV (실측 2026-08-12)
+
+```text
+Time,Coin,Network,Amount,Address,TXID,Status
+```
+
+- 날짜 열 이름이 `Date(UTC+0)` 이 아니라 **`Time`** 이고, 타임존은 **파일명 `…(UTC+9)…`** 에만 있다.
+- 줄바꿈은 **CRLF**.
+- 파서는 `Date(UTC+0)` → `Date(UTC)` → `Time` 순으로 날짜 열을 찾고,
+  열 이름에 타임존이 없으면 파일명에서, 그것도 없으면 UTC 로 두고 **경고**한다.
 
 ---
 

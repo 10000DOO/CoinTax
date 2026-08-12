@@ -121,13 +121,17 @@ Date(UTC+0), Coin, Network, Amount, Address, TXID, Status
 ### 4.3 OKX CSV
 
 ```text
-Read UTF-8
+Read UTF-8 (BOM 제거 · 실패 시 인코딩 폴백)
   → Line0 meta → timezone, accountType
-  → Line1 header
+  → Line1 header (중복·빈 열 이름 허용 — 첫 열 채택)
   → Rows
        ├ Spot → group by Order id → synthesize buy/sell
-       └ Transfer → deposit/withdrawal via Balance Change
+       │        (Balance Change 는 수수료 차감 후 → quantityIsNetOfFee = true)
+       └ Transfer → **transferInternal** (거래↔펀딩 내부 이동)
 ```
+
+⚠️ Trading History 의 `Transfer in/out` 을 외부 입출금으로 잡으면 Funding History 와 함께
+import 했을 때 같은 이동이 이중 반영된다. 외부 브릿지는 **Funding History 의 Deposit/Withdrawal** 만 쓴다.
 
 Spot 이중 계산 방지: Order 단위로 base leg + quote leg 한 쌍.
 
@@ -178,6 +182,12 @@ Import 화면
 | tx 주소 힌트 (저장 시 해시만) | 최우선 |
 
 Confirmed link만 원가 이전 (`TransferCostPolicy`).
+
+**1:1 배정 필수.** 후보 생성 시 점수 높은 순으로 출금·입금을 한 번씩만 배정한다.
+같은 입금이 두 출금에 제안되면 사용자가 둘 다 확정할 수 있고, 그러면 입고 원가가 이중 계상된다.
+`MatchingService.confirm` 도 이미 쓰인 출금·입금을 거부하며, 엔진은 중복 링크를 Critical(V-QTY-04)로 보고한다.
+
+거부(`rejected`)한 쌍은 다시 제안하지 않는다. 수동 연결·연결 해제는 `linkManually` / `unlink`.
 
 ### 6.3 조합 시나리오
 

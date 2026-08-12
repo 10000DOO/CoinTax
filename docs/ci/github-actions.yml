@@ -9,13 +9,26 @@ on:
 jobs:
   test:
     name: macOS unit tests (synthetic only)
-    runs-on: macos-14
+    # 배포 타깃이 macOS 15.0 이므로 러너도 15 이상이어야 한다.
+    # macos-14 에서는 테스트 호스트 앱(CoinTax.app)이 실행되지 않는다.
+    runs-on: macos-15
     timeout-minutes: 45
+    env:
+      # GitHub 러너에는 개발자 인증서가 없다. 서명을 켜두면 빌드 단계에서 바로 실패한다.
+      SIGNING_OFF: >-
+        CODE_SIGNING_ALLOWED=NO
+        CODE_SIGNING_REQUIRED=NO
+        CODE_SIGN_IDENTITY=
+        CODE_SIGN_ENTITLEMENTS=
+        DEVELOPMENT_TEAM=
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select Xcode
-        run: sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
+      - name: Show toolchain
+        run: |
+          sw_vers
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i macos || true
 
       - name: Build for testing
         run: |
@@ -24,44 +37,40 @@ jobs:
             -scheme CoinTax \
             -destination 'platform=macOS,arch=arm64' \
             -derivedDataPath DerivedData \
+            $SIGNING_OFF \
             build-for-testing
 
       - name: Run CoinTaxTests
         run: |
           set -euo pipefail
-          # xcodebuild may hang after tests on some hosts — kill after suite completes
-          log=$(mktemp)
-          (
-            xcodebuild \
-              -scheme CoinTax \
-              -destination 'platform=macOS,arch=arm64' \
-              -derivedDataPath DerivedData \
-              test-without-building \
-              -only-testing:CoinTaxTests \
-              -parallel-testing-enabled NO \
-              >"$log" 2>&1
-          ) &
-          pid=$!
-          for i in $(seq 1 120); do
-            if grep -q "Test Suite 'All tests' passed" "$log" 2>/dev/null; then
-              sleep 2
-              kill "$pid" 2>/dev/null || true
-              wait "$pid" 2>/dev/null || true
-              tail -50 "$log"
-              exit 0
-            fi
-            if grep -q "Test Suite 'All tests' failed" "$log" 2>/dev/null; then
-              tail -80 "$log"
-              kill "$pid" 2>/dev/null || true
-              exit 1
-            fi
-            if ! kill -0 "$pid" 2>/dev/null; then
-              break
-            fi
-            sleep 2
-          done
-          tail -80 "$log"
-          if grep -q "with 0 failures" "$log"; then
-            exit 0
+          # `test-without-building` 이 출력 없이 종료되는 경우가 있어 xctestrun 을 직접 지정한다.
+          run=$(ls DerivedData/Build/Products/*.xctestrun | head -1)
+          echo "xctestrun: $run"
+          xcodebuild \
+            -xctestrun "$run" \
+            -destination 'platform=macOS,arch=arm64' \
+            -only-testing:CoinTaxTests \
+            -parallel-testing-enabled NO \
+            test-without-building | tee test.log
+
+          # 판정은 **마지막 합계 줄**로만 한다.
+          # 개별 스위트 줄에도 "with 0 failures" 가 나오므로 아무 줄이나 grep 하면 실패를 놓친다.
+          SUMMARY="$(grep -E "Executed [0-9]+ tests?, with [0-9]+ failures?" test.log | tail -1)"
+          if [ -z "$SUMMARY" ]; then
+            echo "::error::테스트 결과를 판정할 수 없습니다"
+            exit 1
           fi
-          exit 1
+          echo "$SUMMARY"
+          if ! echo "$SUMMARY" | grep -qE "with 0 failures"; then
+            echo "::error::단위 테스트 실패"
+            grep -E "error:.*-\[CoinTaxTests|^Test Case.*failed" test.log | head -40
+            exit 1
+          fi
+
+      - name: Upload test log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-log
+          path: test.log
+          if-no-files-found: ignore

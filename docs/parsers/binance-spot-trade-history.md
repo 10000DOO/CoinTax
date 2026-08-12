@@ -22,10 +22,10 @@
 | C | `Base Asset` | 기초 자산 | `BTC` |
 | D | `Quote Asset` | 견적 자산 | `USDT` |
 | E | `Type` | 방향 | `BUY` / `SELL` |
-| F | `Price` | 체결가 (quote/base) | `87622.38` |
-| G | `Amount` | **base 수량** | `0.00236` |
-| H | `Total` | **quote 대금** (≈ Price×Amount) | `206.7888168` |
-| I | `Fee` | 수수료 수량 | `0.00018534` |
+| F | `Price` | 체결가 (quote/base) | `80000.00` |
+| G | `Amount` | **base 수량** | `0.00100` |
+| H | `Total` | **quote 대금** (≈ Price×Amount) | `80.0000000` |
+| I | `Fee` | 수수료 수량 | `0.00010000` |
 | J | `Fee Coin` | 수수료 자산 | `BNB` 또는 base |
 
 샘플에 **입출금/전송 행 없음** — 현물 체결만.
@@ -53,6 +53,38 @@
 
 ---
 
+## 2.9 변형 B — 거래내역 화면 CSV (실측 2026-08-12)
+
+바이낸스는 **두 가지 다른 포맷**을 내려준다. 위 §1 은 리포트센터 XLSX 이고,
+거래내역 화면에서 바로 내려받으면 컬럼이 완전히 다르다.
+
+```text
+Time,Pair,Side,Price,Executed,Amount,Fee
+2026-01-02 18:31:37,XAUTUSDT,BUY,4000.00,0.1234XAUT,493.60000000USDT,0.0006100BNB,,,
+```
+
+| 헤더 | 의미 | 주의 |
+|------|------|------|
+| `Time` | 체결 시각 | **타임존이 컬럼명에 없다.** 파일명 `…(UTC+9)…` 에만 있다 |
+| `Pair` | 마켓 | **구분자 없음** (`XAUTUSDT`) → 쪼개는 위치가 모호하다 |
+| `Side` | `BUY` / `SELL` | |
+| `Price` | 체결가 | 단위 없음 |
+| `Executed` | base 수량 **+ 단위** | `0.1234XAUT` |
+| `Amount` | quote 대금 **+ 단위** | `493.6USDT` |
+| `Fee` | 수수료 **+ 단위** | `0.0006100BNB` |
+
+행 끝에 빈 필드가 몇 개 더 붙는다. 줄바꿈은 **CRLF**.
+
+### 파서 규칙
+
+1. base/quote 심볼은 `Pair` 를 추측해 쪼개지 않고 **`Executed`/`Amount` 의 단위 접미사**에서 얻는다.
+   (`ADAUSDT` 처럼 어디서 갈라지는지 알 수 없는 쌍에서 안전하다.)
+2. 시각은 **파일명의 `(UTC±H)`** 로 해석한다. UTC 로 단정하면 최대 하루가 밀려
+   환율 적용일과 과세연도 귀속(2027-01-01 00:00 KST 경계)이 틀어진다.
+3. `Executed` 는 수수료 차감 **전** 체결 수량 → `quantityIsNetOfFee = false`.
+
+---
+
 ## 3. 파서 구현 메모
 
 - 확장자: `.xlsx` 우선. (CSV export 변형이 있으면 detect 분기)
@@ -66,7 +98,7 @@
 
 ```text
 Date(UTC),Pair,Base Asset,Quote Asset,Type,Price,Amount,Total,Fee,Fee Coin
-2025-12-25 14:00:15,BTC/USDT,BTC,USDT,BUY,87622.38,0.00236,206.7888168,0.00018534,BNB
+2025-12-25 14:00:15,BTC/USDT,BTC,USDT,BUY,80000.00,0.00100,80.00000,0.0001,BNB
 ```
 
 ---
@@ -77,7 +109,7 @@ Date(UTC),Pair,Base Asset,Quote Asset,Type,Price,Amount,Total,Fee,Fee Coin
 |--------|---------|------|
 | 현물 체결 | ✅ | |
 | 출금 | ❌ (이 파일) | [binance-withdraw-history.md](./binance-withdraw-history.md) ✅ 실측 |
-| 입금 | ❌ | **Deposit History** 아직 미수집 |
+| 입금 | ❌ (이 파일) | [binance-deposit-history.md](./binance-deposit-history.md) ✅ 실측 |
 | 내부 이체 | ❌ | 별도 |
 
-전송 매칭(빗썸↔바이낸스)을 하려면 **출금·입금 CSV를 추가 수집**해야 한다.
+전송 매칭(빗썸↔바이낸스)을 하려면 **Deposit·Withdraw History 파일을 함께 import** 해야 한다 (둘 다 실측·파서 구현 완료).

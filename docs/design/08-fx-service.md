@@ -13,7 +13,8 @@ KRW 환산이 필요한 이벤트에 **거래일(KST 일자) 기준환율**을 �
 
 1. 이벤트에 KRW 금액 있음 → FX 불필요  
 2. 로컬 캐시 (당일 고시)  
-3. **자동 원격 조회(기본 ON)** — ECOS 키 있으면 기준환율 계열, 없으면 공개 시세 폴백  
+3. **자동 원격 조회(기본 ON)** — **한국은행 ECOS 전용** (인증키 필요).
+   공개 시세 폴백은 **기본 차단**이며, 켜면 사용 날짜가 리포트에 경고로 남는다 (TQ-05)  
 4. 당일 미고시 → **직전 고시일** (`FXHolidayPolicy`)  
 5. 그래도 없음 → missing dates → 수동/CSV → 계산 preflight 실패  
 
@@ -75,10 +76,12 @@ USDT → KRW  :=  USD/KRW 기준환율 (당일)
 
 ## 5. 원격 소스
 
-구현 시 1개 선택 (잔여 미결):
+**확정: 한국은행 ECOS Open API** (통계표 `731Y001`, 항목 `0000001`, 주기 D).
 
-- 한국은행 등 공개 API  
-- 실패 시 수동 전용으로 동작해야 함 (앱 사용 불가 상태 금지)
+- 인증키는 사용자가 발급해 Keychain 에 저장한다. 설정 화면에 발급 절차 5단계를 안내한다.
+- 키가 없거나 응답이 비면 자동 조회를 하지 않고 수동 입력·CSV 를 안내한다 (앱은 계속 동작).
+- `CompositeFXClient.Outcome` 으로 `noKey / keyRejected / publicFallbackUsed` 를 UI에 알린다.
+- 공개 시세(`currency-api`)는 **외국환거래법상 기준환율이 아니다.** 기본 차단, 켜면 경고 표시.
 
 **프라이버시:** 요청에 거래 목록·수량 넣지 않음. 날짜 배열 + 통화쌍만.
 
@@ -94,4 +97,4 @@ USDT → KRW  :=  USD/KRW 기준환율 (당일)
 
 ## 7. 다음
 
-[09-csv-and-matching.md](./09-csv-and-matching.md)
+[09-import-and-matching.md](./09-import-and-matching.md)

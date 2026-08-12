@@ -31,11 +31,12 @@ enum EventType: String, Codable {
 }
 enum LinkStatus: String, Codable { case suggested, confirmed, rejected }
 enum SummaryStatus: String, Codable { case draft, verified, blocked }
-enum SourceFormat: String, Codable { case pdf, xlsx, csv }
+enum SourceFormat: String, Codable { case pdf, xlsx, csv, text, unknown }
 
 struct AssetSymbol: Hashable, Codable {
     var code: String  // uppercased "USDT","BTC","KRW"
-    init(_ s: String) { code = s.trimmingCharacters(in: .whitespaces).uppercased() }
+    // 대문자화 + 네트워크 접미사 제거 + 별칭 표 적용 (F-TX-02): XBT→BTC, USDT-TRC20→USDT …
+    init(_ s: String) { /* Domain/Models/Identifiers.swift 참조 */ }
 }
 
 struct Project: Identifiable, Codable {
@@ -92,6 +93,7 @@ struct LedgerEvent: Identifiable, Codable {
     var sourceKind: String           // parser id
     var rawRef: String?              // "page3-row12" / "row5"
     var needsFX: Bool
+    var quantityIsNetOfFee: Bool     // 원본 수량이 이미 수수료 차감 후인지 (OKX=true, 바이낸스=false)
 }
 
 struct TransferLink: Identifiable, Codable {
@@ -137,6 +139,10 @@ struct DisposalRecord: Codable, Identifiable {
     var pnlKRW: Decimal              // proceeds - cost - fees
     var method: CostBasisMethod
     var taxYear: Int
+    // 감사 추적 (06-integrity §2.3)
+    var fxRateUsed: Decimal?         // 양도가 환산에 쓴 USD/KRW (원화 직기입이면 nil)
+    var fxSourceDate: String?        // 그 환율의 실제 고시일 (휴일 대체 시 직전 고시일)
+    var deemedApplied: Bool          // 의제취득가로 재기동된 뒤의 처분인지
 }
 
 struct DeemedPosition: Codable {
@@ -183,6 +189,7 @@ struct TaxYearSummary: Codable {
     var disclaimers: [String]
     var calculatedAt: Date
     var verification: VerificationReport?
+    var fxSources: [String]          // 적용 환율 출처 요약 (리포트·export 노출)
 }
 
 struct VerificationIssue: Codable, Identifiable {
@@ -261,16 +268,49 @@ function importFile(url, project, accountHint?):
   return result
 ```
 
-### 3.2 Fingerprint
+### 3.2 Fingerprint · 중복 제거
+
+**두 개의 키를 쓴다.**
 
 ```text
+// ① fingerprint — 원본 위치까지 포함한 고유 식별 (감사·추적용)
 if externalID nonempty:
   fp = accountID + "|" + parserID + "|ext|" + externalID
 else:
   fp = accountID + "|" + parserID + "|h|" + sha256(
         iso8601(timestamp) + type + base + qty + (price??) + (quoteAmount??) + (fee??) + (rawRef??)
       )
+
+// ② contentKey — **행 번호를 뺀 내용 기준 키** (중복 판정용)
+if externalID nonempty:
+  key = accountID + "|" + parserID + "|ext|" + externalID
+else:
+  key = accountID + "|" + parserID + "|c|" + sha256(
+        iso8601(timestamp) + type + base + quote + qty + (price??) + (quoteAmount??) + (quoteAmountKRW??) + (fee??)
+      )
 ```
+
+**왜 두 개인가** — `rawRef`(행 번호)를 중복 판정에 쓰면, 기간이 겹치는 export 를 다시 가져올 때
+같은 거래가 다른 행 번호를 달고 와서 중복으로 쌓인다. 거래ID가 없는
+바이낸스 Spot·빗썸 확인서·제네릭에서 실제로 발생한다.
+
+**개수까지 맞춰서 비교한다.** 같은 초에 같은 수량·가격으로 체결된 **서로 다른** 두 건이 있을 수 있으므로,
+내용키별로 세어 `기존 개수`를 넘는 만큼만 새로 넣는다.
+
+```text
+existing[key] = 프로젝트에 이미 있는 같은 내용의 건수
+for e in incoming:
+  n[key] += 1
+  if n[key] <= existing[key]: skip      // 이미 있는 만큼은 건너뛴다
+  else: insert                          // 늘어난 만큼만 넣는다
+```
+
+같은 externalID 인데 수량이 다르면(기간 경계에서 잘린 주문 등) 기존 값을 유지하고 경고한다.
+
+파일 단위로는 **원본 바이트 SHA-256** 이 같으면 import 자체를 거부한다 (`E_DUPLICATE_FILE`).
+
+검증기 `V-IMP-05`: 같은 내용의 거래가 **서로 다른 파일**에서 발견되면 경고
+(이 규칙 도입 전에 쌓인 데이터 대비).
 
 ### 3.3 바이낸스 Spot
 
@@ -323,13 +363,16 @@ for each orderId group:
   feeBase = sum(abs(Fee) where Fee Unit == base)
   // If netBase > 0: buy base with cost = abs(netQuote) in USDT
   // If netBase < 0: sell base proceeds = abs(netQuote)
+  // LOCK: Balance Change 는 수수료가 이미 빠진 순증분 → quantityIsNetOfFee = true 로 표시.
+  //       (바이낸스 Amount 는 차감 전이므로 false. 엔진이 base 수수료를 두 번 빼면 수량이 이중 축소된다.)
   // Use Filled Price from any leg as price
   emit one buy OR one sell (+ fee fields)
   // Do NOT emit 4 raw legs as 4 trades
 
-// Transfer:
-  Action Transfer in → deposit, qty = abs(Balance Change), asset = Balance Unit
-  Transfer out → withdrawal, qty = -abs(Balance Change)
+// Transfer:  ※ 거래 계정 ↔ 펀딩 계정 **내부 이동**이다 (외부 입출금은 Funding History 담당)
+  Action Transfer in  → transferInternal, qty = +abs(Balance Change), asset = Balance Unit
+  Action Transfer out → transferInternal, qty = -abs(Balance Change)
+  // deposit/withdrawal 로 잡으면 Funding History 와 함께 import 할 때 같은 이동이 이중 반영된다.
 ```
 
 ### 3.7 OKX Funding History
@@ -386,7 +429,7 @@ for w in withdrawals where asset not KRW and not already linked confirmed:
     dQty = abs(d.quantity)
     if dQty > wQty * 1.0001: continue  // 입고가 출고보다 유의미하게 크면 제외
     lost = wQty - dQty
-    // allow lost up to max(wQty * 0.02, fee if known, 1e-8)
+    // allow lost up to max(wQty * 0.01, fee if known, 1e-6)  // 정본: ../IMPLEMENTATION.md §7
     if lost < 0: continue
     score = 0
     score += 1.0 - min(dt / 72h, 1) * 0.5
@@ -433,7 +476,8 @@ function replay(events, links, policies, fx, marketPrices, options):
     // else FX path
     usdt = abs(event.quoteAmount ?? event.quantity * event.price)
     rate = fx.rate(dayKST(event.timestamp), "USD/KRW")
-    if rate nil: event.needsFX = true; throw MissingFX
+    if rate nil: record Critical V-FX-01 (throw 하지 않는다 — 계산은 끝까지 진행)
+    if quoteAsset 이 USDT/USD/KRW 가 아니면: record Critical V-FX-01 (임의 환산 금지)
     return usdt * rate + feeKRW(event)
 
   function feeKRW(event): ...
@@ -552,7 +596,8 @@ function aggregate(disposals, taxYear, extraDeductible, policy):
 
 ## 7. Verification (필수 구현 목록)
 
-[06-integrity.md](../06-integrity.md) 전체. 최소 구현:
+정본은 [06-integrity.md](../06-integrity.md) **§3 전체**이며 현재 전 항목이 구현되어 있다.
+아래는 착수 시 최소 범위였던 목록(이력):
 
 | ID | 검사 |
 |----|------|
@@ -626,6 +671,9 @@ G3 OKX multi-leg: 한 Order id 여러 행 → **매매 이벤트 1개** (레그 
 | E_MISSING_MARKET | 의제 시가 없음 | 2026-12-31 시가를 입력하세요 |
 | E_NEGATIVE_LOT | 재고 부족 | 보유 수량보다 많은 매도 |
 | E_VERIFY_FAIL | 검증 실패 | 계산 검증 실패 — 내보내기 불가 |
+| E_QUOTE_UNCONVERTIBLE | 코인 견적 환산 불가 | 원화 환산 근거가 없습니다 |
+| E_DUPLICATE_FILE | 같은 파일 재import | 이미 가져온 파일입니다 |
+| E_STORE_UNAVAILABLE | 저장소 열기 실패 | 저장소를 열 수 없습니다 |
 
 ---
 
@@ -708,14 +756,14 @@ detect 동점 시 파일명 힌트:
 
 ## 15. 완료 정의 (다른 세션 Definition of Done)
 
-1. [x] macOS 15 빌드  
+1. [x] macOS 15 빌드 (경고 0)  
 2. [x] 6개 파서 + 합성 fixture 테스트 (+ `generic-tabular-v1` 폴백)  
 3. [x] G1/G1b/G2 수치 테스트  
 4. [x] Verify fail-closed export  
-5. [x] MVP requirements §10 전부  
-6. [x] 실파일 없이도 CI 가능 (synthetic only)  
+5. [~] MVP requirements §10 — 실파일 검증 2건 잔여 (§10-1 빗썸 PDF, §10-10 샌드박스 저장)  
+6. [x] 실파일 없이도 CI 가능 (synthetic only, 서명 없이 빌드)  
 
-> 체크 갱신: 2026-08-11.
+> 체크 갱신: 2026-08-11 (테스트 55건 통과).
 
 ---
 

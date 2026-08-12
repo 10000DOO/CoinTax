@@ -9,23 +9,34 @@
 ## 1. PolicyBundle
 
 ```swift
-struct PolicyBundle: Equatable, Codable {
-    var id: String                    // e.g. "cointax-v1.0"
-    var transferCost: TransferCostPolicyID
-    var costMethod: CostMethodResolverID
-    var deemed: DeemedCostPolicyID
-    var taxRate: TaxRatePolicyID
-    var rounding: RoundingPolicyID
-    var fxAssumption: FXAssumptionPolicyID
+// 실제 구현: Domain/Policies/PolicyBundle.swift
+// 프로토콜 존재 타입을 직접 담으므로 Codable 이 아니다. 감사 추적은 각 policy 의 `id` 문자열로 한다.
+struct PolicyBundle: Sendable {
+    var id: String                          // e.g. "cointax-v1.0"
+    var transferCost: any TransferCostPolicy
+    var costMethodResolver: any CostMethodResolver
+    var deemed: any DeemedCostPolicy
+    var taxRate: any TaxRatePolicy
+    var rounding: any RoundingPolicy
+    var fxAssumption: any FXAssumptionPolicy
     /// 사용자·리포트 노출용 한국어 고지 (정책별)
     var disclaimers: [String]
 }
 
 extension PolicyBundle {
-    /// 제품 기본. 세법 확정 시 여기(또는 새 bundle id)만 바꾸면 전 파이프라인 반영.
+    /// 제품 기본(잠금값). 세법 확정 시 여기(또는 새 bundle id)만 바꾸면 전 파이프라인 반영.
     static var v1Default: PolicyBundle { ... }
+
+    /// 사용자 설정을 반영한 **현재** 번들. 화면·계산 파이프라인 모두 이것만 읽는다.
+    /// 정책 사본을 여러 곳에서 들고 있으면 설정 변경이 한쪽에만 반영돼 표시와 계산이 어긋난다.
+    /// 기본값이 아닌 선택은 id 에 표시한다 — 예: `cointax-v1.0+deemed_perLot`
+    static var current: PolicyBundle { ... }
 }
 ```
+
+> **단일 출처 규칙**: 정책 번들은 `PolicyBundle.current` 에서만 만든다.
+> `AppEnvironment.policies` 는 저장 프로퍼티가 아니라 계산 프로퍼티이고,
+> `CalculationPipeline` 은 사본을 들지 않는다(테스트 고정용 `policiesOverride` 만 예외).
 
 **교체 절차 (운영)**
 

@@ -15,7 +15,9 @@
 | Golden | G3 OKX Order 멀티레그 → 매매 1건 |
 | Golden | G4 파서 헤더 detect (6 파서) |
 | Integration | synthetic import → match → calc → verify |
-| UI smoke | 런치, export disabled when blocked |
+| Regression | 엔진 fail-closed (재고 부족·코인 견적·링크 중복·제3자산 수수료) — `EngineFailClosedTests` |
+| Regression | 파서 견고성 (BOM·중복 헤더·Type 누락·빗썸 2단 병합) — `ParserTests` |
+| UI smoke | 미구현 (`CoinTaxUITests` 는 템플릿 상태이며 스킴에 포함되지 않음) |
 
 **규약:** CostBasis/Tax PR에 Verifier 테스트 없으면 머지하지 않음.
 
@@ -69,10 +71,18 @@
 
 요구사항 MVP + 본 design/* 문서 합의 후 구현 착수.
 
-남은 구현 디테일만:
+### 5.1 현재 상태 (2026-08-11)
 
-- FX 원격 벤더 1순위  
-- 시가 자동 소스  
-- 반올림 모드 최종 표기  
+- 단위 테스트 **55건 · 실패 0 · 컴파일 경고 0**
+- 실행: `./scripts/smoke.sh` (서명 없이도 동작)
 
-이상은 코드 착수와 병행 가능.
+### 5.2 남은 결정 (세무 확인 필요)
+
+[../fix-review-findings.md](../fix-review-findings.md) §9 Q1~Q4:
+의제취득가 lot별/평균 · 환율 공개 폴백 유지 여부 · 총수입금액 정의 · 세액 절사 규칙.
+
+### 5.3 남은 구현
+
+- UI 스모크 테스트 (export 잠금 상태 확인)
+- 시가 자동 조회 소스
+- SwiftData `VersionedSchema` (배포 전 필수)

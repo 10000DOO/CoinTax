@@ -86,11 +86,13 @@ empty → imported → matching → ready_to_calc
                               → blocked (fix issues, re-calc after fix)
 ```
 
-| 상태 | export | 보유 표시 |
-|------|--------|-----------|
-| ready_to_calc 이전 | 불가 | 가능(부분) |
-| blocked | 불가 | 마지막 성공 스냅샷 or 재계산 결과 |
-| verified | 가능 | 가능 |
+| 검증 결과 | `TaxYearSummary.status` | export |
+|-----------|------------------------|--------|
+| passed | `verified` | 가능 |
+| passedWithWarnings | `draft` (경고만으로는 verified 아님 — 06-integrity §2.2) | 가능 |
+| failed (critical ≥ 1) | `blocked` | **불가** |
+
+보유 현황은 어느 상태에서도 표시한다 (마지막 계산 결과 기준).
 
 ---
 

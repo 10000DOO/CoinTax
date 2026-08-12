@@ -36,14 +36,20 @@ Domain ↔ Entity **Mapper**만 Infrastructure에. Domain은 Entity 모름.
 
 ## 3. 계산 스냅샷
 
-재현을 위해 저장:
+재현을 위해 저장 (`SnapshotEntity`):
 
-- policyBundle JSON  
-- summary JSON  
-- verification JSON  
-- calculatedAt  
+- `policyBundleID` (정책 번들은 프로토콜 존재 타입이라 JSON 직렬화 대상이 아님 — id 로 추적)
+- `payloadJSON` = `TaxYearSummary` (검증 리포트·환율 출처·감사 필드 포함)
+- `taxYear` · `status` · `calculatedAt`
 
-재계산 시 이전 스냅샷은 이력으로 보관(최대 N개, v1 단순 덮어쓰기 가능).
+재계산 시 이전 스냅샷은 **최근 10개**만 보관하고 초과분은 삭제한다
+(`CalculationPipeline.snapshotHistoryLimit`).
+
+### 3.1 스키마 변경
+
+현재 `VersionedSchema`/`MigrationPlan` 은 없다. 필드 추가는 **선언부 기본값이 있는 속성**으로만 하고
+(경량 마이그레이션 범위), 저장소를 열지 못하면 앱은 죽지 않고 메모리 모드로 실행하며 사유를 표시한다
+(`CoinTaxApp.init`). 배포 전에는 버전 스키마 도입이 필요하다.
 
 ---
 

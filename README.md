@@ -11,8 +11,10 @@
 - 원가: 빗썸 **이동평균**, 해외 **FIFO**
 - 의제: 2026-12-31 스냅샷 후 `max(장부, 시가)`
 - 세금: 공제 250만, 국세 20% + 지방 2%, **Verify fail-closed export**
-- 환율: **자동 조회 기본 ON** (ECOS 키 선택 / 공개 폴백), 휴일·미고시 → **직전 고시일**, 수동·CSV 옵션
+- 환율: **한국은행 ECOS 전용** (인증키 발급 안내 내장), 휴일·미고시 → **직전 고시일**(실제 고시일 기록), 수동·CSV 옵션
 - Export: CSV / PDF (검증 통과 시에만)
+- **세무 확인 화면**: 확정 해석이 없는 가정 18건 + 세무사에게 물어볼 질문 문장 (복사 가능)
+- 의제취득가: 평균/매입건별 **두 방식 계산**해 세액 차이 비교
 
 ## 문서
 
@@ -22,6 +24,13 @@
 | [01-requirements §10](./docs/01-requirements.md) | MVP 수용 기준 |
 | [design/14-implementation-spec](./docs/design/14-implementation-spec.md) | 알고리즘·골든·DoD |
 | [parsers/](./docs/parsers/) | 거래소 포맷 정본 |
+
+## 검증 상태
+
+단위 테스트 **55건 통과 · 컴파일 경고 0** (합성 fixture 기준).
+실파일 확인이 남은 항목과 세무 결정 대기 항목은
+[docs/fix-review-findings.md](./docs/fix-review-findings.md) §7-2 · §9 참조.
+전체 교차 검토 리포트: [docs/review-2026-08-11.html](./docs/review-2026-08-11.html)
 
 ## 빌드·테스트
 
@@ -38,7 +47,7 @@ chmod +x scripts/smoke.sh
 
 ## CI
 
-워크플로 정의: [`docs/ci/github-actions.yml`](./docs/ci/github-actions.yml)  
+워크플로 정의: [`docs/ci/github-actions.yml`](./docs/ci/github-actions.yml) — `macos-15` 러너, 서명 없이 빌드·테스트.
 (GitHub에 올리려면 PAT에 `workflow` scope가 필요합니다. 적용 방법은 [`docs/ci/README.md`](./docs/ci/README.md).)
 
 로컬: `./scripts/smoke.sh`
