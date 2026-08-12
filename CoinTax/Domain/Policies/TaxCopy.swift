@@ -13,7 +13,29 @@ enum TaxCopy {
     static let costMethods =
         "빗썸 계정은 이동평균법, 바이낸스·OKX 계정은 선입선출법으로 취득가액을 계산합니다."
 
+    /// 잠금된 필수 고지 4종 (`PolicyBundle.v1Default.disclaimers`). 순서·문구 변경 시 policy id 를 올린다.
     static var all: [String] {
         [notTaxAdvice, transferCost, usdtPeg, costMethods]
+    }
+
+    // MARK: - 추가 주의사항 (잠금 4종과 별개 · 리뷰 8-7)
+    //
+    // 필수 고지 4종은 PolicyBundle 에 잠겨 있어 개수를 늘리면 골든 테스트가 깨진다.
+    // 사용자에게 알려야 하지만 정책 고지가 아닌 항목은 여기에 둔다.
+
+    static let zeroCostAcquisition =
+        "에어드롭·수수료 리베이트·연결되지 않은 입금은 취득가 0원으로 처리됩니다. 처분 시 거의 전액이 이익으로 잡히므로, 실제 취득가가 있으면 상대 거래를 연결하거나 직접 확인하세요."
+
+    static let lossNotCarriedForward =
+        "가상자산 기타소득의 손실은 다음 해로 이월되지 않는 것으로 가정했습니다. 연간 통산만 반영됩니다."
+
+    static let scheduleMayChange =
+        "2027-01-01 시행·기본공제 250만 원·세율 20%+2% 는 2026-08 기준 공개 안내에 따른 가정입니다. 시행 유예·개정 시 결과가 달라집니다."
+
+    static let unmatchedWithdrawalCost =
+        "연결되지 않은 출금의 취득원가는 소멸 처리됩니다(세액이 커지는 방향). 상대 입금을 연결하면 원가가 이전됩니다."
+
+    static var notices: [String] {
+        [zeroCostAcquisition, lossNotCarriedForward, scheduleMayChange, unmatchedWithdrawalCost]
     }
 }

@@ -1,13 +1,27 @@
 import Foundation
 
+/// 처분 결과. `shortfallQty > 0` 이면 보유가 부족해 그만큼 처분하지 못했다는 뜻.
+struct DisposeOutcome: Equatable, Sendable {
+    var costKRW: Decimal
+    var shortfallQty: Decimal
+}
+
 protocol AssetBook: AnyObject {
     var quantity: Decimal { get }
     var totalCost: Decimal { get }
     var method: CostBasisMethod { get }
+    /// FIFO 계정의 열린 lot 목록 (검증 V-COST-05용). 이동평균은 빈 배열.
+    var openLots: [(qty: Decimal, unitCost: Decimal)] { get }
     func acquire(qty: Decimal, costKRW: Decimal)
     /// Returns cost disposed
     func dispose(qty: Decimal) throws -> Decimal
+    /// 보유가 부족해도 던지지 않고 가능한 만큼만 처분한다.
+    /// 세금 계산은 예외로 중단하지 않고 Critical 이슈로 보고해야 하므로(06-integrity fail-closed) 이 경로를 쓴다.
+    func disposeClamped(qty: Decimal) -> DisposeOutcome
     func reset()
+    /// 장부를 주어진 lot 구성으로 바꾼다 (의제취득가 재기동).
+    /// 이동평균 장부는 lot 개념이 없으므로 합산해서 반영한다.
+    func replaceLots(_ lots: [(qty: Decimal, unitCost: Decimal)])
     func snapshotUnitCost() -> Decimal
 }
 
@@ -30,9 +44,29 @@ final class MovingAverageBook: AssetBook {
     private(set) var quantity: Decimal = 0
     private(set) var totalCost: Decimal = 0
 
+    var openLots: [(qty: Decimal, unitCost: Decimal)] { [] }
+
     func acquire(qty: Decimal, costKRW: Decimal) {
         quantity += qty
         totalCost += costKRW
+    }
+
+    func disposeClamped(qty: Decimal) -> DisposeOutcome {
+        guard qty > 0 else { return DisposeOutcome(costKRW: 0, shortfallQty: 0) }
+        guard quantity > Money.qtyEpsilon else {
+            return DisposeOutcome(costKRW: 0, shortfallQty: qty)
+        }
+        let take = min(qty, quantity)
+        let unit = totalCost / quantity
+        let cost = unit * take
+        quantity -= take
+        totalCost -= cost
+        if Money.isApproxZero(quantity) {
+            quantity = 0
+            totalCost = 0
+        }
+        let short = qty - take
+        return DisposeOutcome(costKRW: cost, shortfallQty: Money.isApproxZero(short) ? 0 : short)
     }
 
     func dispose(qty: Decimal) throws -> Decimal {
@@ -59,6 +93,11 @@ final class MovingAverageBook: AssetBook {
         totalCost = 0
     }
 
+    func replaceLots(_ lots: [(qty: Decimal, unitCost: Decimal)]) {
+        quantity = lots.reduce(0) { $0 + $1.qty }
+        totalCost = lots.reduce(0) { $0 + $1.qty * $1.unitCost }
+    }
+
     func snapshotUnitCost() -> Decimal {
         Money.isApproxZero(quantity) ? 0 : totalCost / quantity
     }
@@ -74,11 +113,28 @@ final class FIFOBook: AssetBook {
 
     var quantity: Decimal { lots.reduce(0) { $0 + $1.qty } }
     var totalCost: Decimal { lots.reduce(0) { $0 + $1.qty * $1.unitCost } }
+    var openLots: [(qty: Decimal, unitCost: Decimal)] { lots.map { ($0.qty, $0.unitCost) } }
 
     func acquire(qty: Decimal, costKRW: Decimal) {
         guard qty > 0 else { return }
         let unit = costKRW / qty
         lots.append(Lot(qty: qty, unitCost: unit))
+    }
+
+    func disposeClamped(qty: Decimal) -> DisposeOutcome {
+        guard qty > 0 else { return DisposeOutcome(costKRW: 0, shortfallQty: 0) }
+        var remain = qty
+        var cost: Decimal = 0
+        while remain > Money.qtyEpsilon, !lots.isEmpty {
+            let take = min(lots[0].qty, remain)
+            cost += take * lots[0].unitCost
+            lots[0].qty -= take
+            remain -= take
+            if Money.isApproxZero(lots[0].qty) {
+                lots.removeFirst()
+            }
+        }
+        return DisposeOutcome(costKRW: cost, shortfallQty: Money.isApproxZero(remain) ? 0 : remain)
     }
 
     func dispose(qty: Decimal) throws -> Decimal {
@@ -105,6 +161,10 @@ final class FIFOBook: AssetBook {
 
     func reset() {
         lots.removeAll()
+    }
+
+    func replaceLots(_ newLots: [(qty: Decimal, unitCost: Decimal)]) {
+        lots = newLots.filter { $0.qty > 0 }.map { Lot(qty: $0.qty, unitCost: $0.unitCost) }
     }
 
     func snapshotUnitCost() -> Decimal {

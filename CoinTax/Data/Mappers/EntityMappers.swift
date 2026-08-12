@@ -48,7 +48,8 @@ enum EntityMappers {
             counterpartyHint: e.counterpartyHint,
             sourceKind: e.sourceKind,
             rawRef: e.rawRef,
-            needsFX: e.needsFX
+            needsFX: e.needsFX,
+            quantityIsNetOfFee: e.quantityIsNetOfFee
         )
     }
 
@@ -91,6 +92,7 @@ enum EntityMappers {
         entity.sourceKind = event.sourceKind
         entity.rawRef = event.rawRef
         entity.needsFX = event.needsFX
+        entity.quantityIsNetOfFee = event.quantityIsNetOfFee
     }
 
     static func makeEntity(from event: LedgerEvent) -> LedgerEventEntity {

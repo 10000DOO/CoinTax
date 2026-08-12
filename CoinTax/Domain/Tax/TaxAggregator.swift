@@ -34,6 +34,7 @@ enum TaxAggregator {
             localTaxKRW: tax.localTaxKRW,
             totalTaxKRW: tax.totalTaxKRW,
             abandonedTransferCostKRW: abandonedTransferCostKRW,
+            extraDeductibleKRW: extraDeductible,
             disposals: ds,
             deemed: deemed,
             disclaimers: policies.disclaimers,

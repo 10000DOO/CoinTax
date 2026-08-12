@@ -105,6 +105,8 @@ final class LedgerEventEntity {
     var sourceKind: String
     var rawRef: String?
     var needsFX: Bool
+    /// 선언부 기본값 필수 — 기존 저장소를 경량 마이그레이션으로 열기 위함 (docs/fix-review-findings.md §8)
+    var quantityIsNetOfFee: Bool = false
     var project: ProjectEntity?
 
     init(id: UUID = UUID(), accountID: UUID, fingerprint: String, timestamp: Date, type: String, baseAsset: String, quantity: String, sourceKind: String) {

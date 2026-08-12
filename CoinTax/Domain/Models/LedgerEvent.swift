@@ -25,6 +25,12 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
     var sourceKind: String
     var rawRef: String?
     var needsFX: Bool
+    /// `quantity`가 이미 수수료를 차감한 **순증분**인지.
+    ///
+    /// 거래소별 관례가 다르다 — 바이낸스 `Amount`는 수수료 차감 **전**,
+    /// OKX `Balance Change`는 차감 **후** 값이다. 엔진이 base 수수료를 한 번 더 빼면
+    /// OKX 쪽 수량이 이중으로 줄어든다(리뷰 1-1). 파서가 이 플래그로 관례를 흡수한다.
+    var quantityIsNetOfFee: Bool
 
     init(
         id: EventID = EventID(),
@@ -50,7 +56,8 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
         counterpartyHint: String? = nil,
         sourceKind: String,
         rawRef: String? = nil,
-        needsFX: Bool = false
+        needsFX: Bool = false,
+        quantityIsNetOfFee: Bool = false
     ) {
         self.id = id
         self.projectID = projectID
@@ -76,6 +83,28 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
         self.sourceKind = sourceKind
         self.rawRef = rawRef
         self.needsFX = needsFX
+        self.quantityIsNetOfFee = quantityIsNetOfFee
+    }
+}
+
+extension LedgerEvent {
+    /// 코인↔코인 매매에서 실제로 움직이는 **견적자산 수량**.
+    ///
+    /// 원화 마켓(빗썸)이나 견적 금액 근거가 없으면 `nil`.
+    /// 매수면 이 수량만큼 견적자산이 나가고(= 그 자산의 처분), 매도면 이 수량만큼 들어온다.
+    /// 이 leg 을 빼먹으면 USDT 잔고가 줄지 않아 원장이 붕괴한다.
+    var cryptoQuoteQuantity: Decimal? {
+        guard type == .buy || type == .sell else { return nil }
+        guard let quote = quoteAsset, !quote.isKRW, quote != baseAsset else { return nil }
+        let amount: Decimal
+        if let quoteAmount {
+            amount = Money.abs(quoteAmount)
+        } else if let price {
+            amount = Money.abs(quantity) * price
+        } else {
+            return nil
+        }
+        return amount > 0 ? amount : nil
     }
 }
 
