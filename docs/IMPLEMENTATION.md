@@ -242,14 +242,14 @@ deductibleExpense = 0
 [01-requirements.md](./01-requirements.md) §10 전체 + 아래:
 
 - [x] `PolicyBundle.id == "cointax-v1.1"` 리포트 표시  
-- [ ] 고지 4종이 리포트·export에 포함 (PDF 다중 페이지로 잘림 없음)  
-      → **미충족.** 한글 고지가 PDF에서 문장 중간에 잘린다
-      ([audit-2026-08-12-verification.md](./audit-2026-08-12-verification.md) D-4). 수정 후 다시 체크할 것  
+- [x] 고지 4종이 리포트·export에 포함 (PDF 다중 페이지로 잘림 없음)  
+      → 줄바꿈을 실제 그려지는 폭으로 계산해 해결. 고지·주의·세무확인 전 항목이
+      PDF 텍스트에 온전히 들어가는지 탐침으로 고정했다  
 - [x] G1 골든 (14-spec 수치) 테스트 통과  
 - [x] Critical verify 시 export 버튼 disabled  
 - [x] 적용 환율 출처(휴일 대체 시 실제 고시일)를 리포트·export에 표시  
 
-> 체크 갱신: 2026-08-12 (CoinTaxTests **200 pass**, 경고 0).
+> 체크 갱신: 2026-08-12 (CoinTaxTests **225 pass**, 경고 0).
 
 ---
 
