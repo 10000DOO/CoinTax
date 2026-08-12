@@ -8,6 +8,7 @@ enum AppSection: String, CaseIterable, Identifiable {
     case matching = "전송 매칭"
     case holdings = "보유"
     case report = "리포트"
+    case taxNotes = "세무 확인"
     case settings = "설정"
 
     var id: String { rawValue }
@@ -20,6 +21,7 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .matching: return "arrow.left.arrow.right"
         case .holdings: return "bitcoinsign.circle"
         case .report: return "doc.text"
+        case .taxNotes: return "exclamationmark.questionmark"
         case .settings: return "gearshape"
         }
     }
@@ -53,6 +55,7 @@ struct RootSplitView: View {
             case .matching: MatchingView()
             case .holdings: HoldingsView()
             case .report: ReportView()
+            case .taxNotes: TaxOpenQuestionsView()
             case .settings: SettingsView()
             }
         }
