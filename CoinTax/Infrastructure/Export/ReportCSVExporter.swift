@@ -14,13 +14,13 @@ enum ReportCSVExporter {
             rows.append(["meta", key, value, "", ""])
         }
         func tax(_ key: String, _ value: Decimal) {
-            rows.append(["tax", key, Money.decimalString(value), "", ""])
+            rows.append(["tax", key, krw(value), "", ""])
         }
 
         meta("policyBundleID", summary.policyBundleID)
         meta("deemedBasisMode", summary.deemedBasisMode)
         if let alt = summary.deemedAlternative {
-            rows.append(["deemedAlt", alt.basisMode, Money.decimalString(alt.totalDeemedCostKRW), Money.decimalString(alt.netIncomeKRW), Money.decimalString(alt.totalTaxKRW)])
+            rows.append(["deemedAlt", alt.basisMode, krw(alt.totalDeemedCostKRW), krw(alt.netIncomeKRW), krw(alt.totalTaxKRW)])
         }
         meta("transferCostPolicy", "abandon_lost_cost")
         meta("taxYear", "\(summary.taxYear)")
@@ -45,8 +45,8 @@ enum ReportCSVExporter {
         let iso = ISO8601DateFormatter()
         for d in summary.disposals {
             rows.append(["disposal", "timestamp", iso.string(from: d.timestamp), d.asset.code, Money.decimalString(d.quantity)])
-            rows.append(["disposal", "amounts", Money.decimalString(d.proceedsKRW), Money.decimalString(d.costKRW), Money.decimalString(d.feesKRW)])
-            rows.append(["disposal", "pnl", Money.decimalString(d.pnlKRW), d.method.rawValue, d.eventID.raw.uuidString])
+            rows.append(["disposal", "amounts", krw(d.proceedsKRW), krw(d.costKRW), krw(d.feesKRW)])
+            rows.append(["disposal", "pnl", krw(d.pnlKRW), d.method.rawValue, d.eventID.raw.uuidString])
             rows.append(["disposal", "audit", d.fxRateUsed.map { Money.decimalString($0) } ?? "", d.fxSourceDate ?? "", d.deemedApplied ? "deemed" : "actual"])
         }
 
@@ -54,7 +54,7 @@ enum ReportCSVExporter {
             rows.append([
                 "deemed", dem.asset.code,
                 Money.decimalString(dem.quantity),
-                Money.decimalString(dem.deemedUnitKRW),
+                krw(dem.deemedUnitKRW),
                 dem.reason
             ])
         }
@@ -84,6 +84,17 @@ enum ReportCSVExporter {
         return rows.map { row in
             row.map(escape).joined(separator: ",")
         }.joined(separator: "\n")
+    }
+
+    /// **원화 금액은 원 단위로 맞춘다.**
+    ///
+    /// 예전에는 `Money.decimalString` 을 그대로 썼다. 화면·PDF 는 원 단위로 반올림하는데
+    /// CSV 만 나눗셈 찌꺼기(소수 30자리대)까지 적어서, 같은 계산인데 화면 `₩4,637,203` /
+    /// CSV `4637202.9` 가 나왔다 (감사 D-7). 신고서에 옮길 때 어느 값을 쓸지 헷갈린다.
+    ///
+    /// 코인 **수량**은 반올림하지 않는다 — 소수 8자리가 의미를 갖는다.
+    private static func krw(_ value: Decimal) -> String {
+        Money.decimalString(Money.roundKRW(value))
     }
 
     private static func escape(_ field: String) -> String {
