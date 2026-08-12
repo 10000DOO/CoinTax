@@ -239,12 +239,31 @@ struct CostBasisEngine {
             guard let quote = e.quoteAsset, let quoteQty = e.cryptoQuoteQuantity else { return }
             guard let quoteKRW else {
                 // 원화 환산 실패는 `krwFromQuote` 가 이미 Critical(V-FX-01)로 기록했다.
-                // 근거 없는 0원으로 장부를 움직이면 오차가 조용히 누적되므로 건드리지 않는다.
+                // 금액(원가·손익)은 근거가 없으므로 만들지 않는다.
                 //
-                // 대신 이 자산을 수량 대조에서 제외한다. 그러지 않으면 검증기가
-                // 「이벤트 수량 합과 보유 수량이 다릅니다」를 덧붙여, 진짜 원인(환율 누락)이
-                // 데이터 오류처럼 보이게 된다.
-                shortfallKeys.insert(bookKey(e.accountID, quote))
+                // **다만 수량은 실제로 움직였다.** 예전에는 여기서 그냥 돌아서서, 코인끼리 바꾼
+                // 견적자산이 장부에 그대로 남았다 (감사 D-5 — BTC 1개로 USDT를 사도 BTC가 1개).
+                // 바이낸스는 원본에 잔고 열이 없어 V-BAL 로도 못 잡고, `shortfallKeys` 때문에
+                // V-QTY-01 도 면제되어 **아무도 모르게 보유가 부풀었다.**
+                //
+                // 그래서 수량만 맞추고, 나간 원가는 「소멸」로 돌린다 (세금이 커지는 방향).
+                // 받은 자산의 취득가는 0 이 되므로 나중에 팔 때 전액이 이익으로 잡힌다 —
+                // 어느 쪽도 과소 신고가 아니다.
+                let b = book(for: e.accountID, asset: quote)
+                if e.type == .buy {
+                    let out = b.disposeClamped(qty: quoteQty)
+                    abandonedTotal += out.costKRW
+                    abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW
+                }
+                // 매도(견적자산을 받는 쪽)는 원가 근거가 없어 0원으로 입고한다.
+                if e.type == .sell {
+                    b.acquire(qty: quoteQty, costKRW: 0)
+                }
+                issues.append(.init(
+                    id: "V-FX-01", severity: "critical",
+                    message: "\(quote.code) 를 원화로 환산할 근거가 없어 이 거래의 양도가액·취득가를 확정할 수 없습니다 — 수량만 반영하고 원가는 소멸 처리했습니다 (세액이 커지는 방향)",
+                    context: "\(e.baseAsset.code)/\(quote.code) \(TaxTime.dayKST(e.timestamp))"
+                ))
                 return
             }
             let b = book(for: e.accountID, asset: quote)

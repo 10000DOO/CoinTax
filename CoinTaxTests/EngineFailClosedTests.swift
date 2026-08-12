@@ -151,9 +151,22 @@ final class EngineFailClosedTests: XCTestCase {
             .replay(events: [buy, sellForUSDT], links: [])
         XCTAssertEqual(noFX.missingFXDays, ["2026-06-01"], "코인↔코인 처분은 과세 전이라도 환율이 필요하다")
         XCTAssertTrue(noFX.issues.contains { $0.id == "V-FX-01" && $0.severity == "critical" })
-        // 환율이 없어 USDT 를 입고하지 못했으면 수량 대조에서 그 자산을 빼야 한다.
-        // 그러지 않으면 검증기가 수량 불일치를 덧붙여 진짜 원인을 가린다.
-        XCTAssertTrue(noFX.shortfallKeys.contains { $0.hasSuffix("|USDT") })
+        // 환산 근거가 없어도 **수량은 실제로 움직였다** — 원가만 0으로 두고 수량은 반영한다.
+        //
+        // 예전에는 장부를 아예 건드리지 않고 `shortfallKeys` 에 넣어 수량 대조를 면제했다.
+        // 그러면 코인끼리 바꾼 견적자산이 장부에 그대로 남아 보유가 부풀고, 바이낸스처럼
+        // 원본에 잔고 열이 없는 거래소에서는 V-BAL 로도 못 잡았다 (감사 D-5).
+        let noFXUsdt = try XCTUnwrap(noFX.holdings.rows.first { $0.asset.code == "USDT" })
+        XCTAssertEqual(noFXUsdt.quantity, 60_000, "받은 수량은 근거가 있다 — 반영해야 한다")
+        XCTAssertFalse(noFX.shortfallKeys.contains { $0.hasSuffix("|USDT") },
+                       "수량을 맞췄으므로 대조를 면제하면 안 된다 — 면제하면 진짜 수량 오류가 묻힌다")
+
+        // 원가가 0 으로 들어갔는지는 **시가를 넣지 않고** 봐야 한다.
+        // `holdings` 는 의제취득가 적용 뒤 스냅샷이라, 시가가 있으면 max(장부 0, 시가)로 올라간다.
+        let noFXNoMarket = try engine(accounts: [acc]).replay(events: [buy, sellForUSDT], links: [])
+        let bare = try XCTUnwrap(noFXNoMarket.holdings.rows.first { $0.asset.code == "USDT" })
+        XCTAssertEqual(bare.quantity, 60_000)
+        XCTAssertEqual(bare.totalCostKRW, 0, "원가는 근거가 없으므로 0 (처분 시 전액 이익 = 세금 커지는 쪽)")
 
         // 환율이 있으면 USDT 가 원화가액으로 입고된다
         let withFX = try engine(
