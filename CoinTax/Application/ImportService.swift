@@ -115,6 +115,46 @@ final class ImportService {
         )
     }
 
+    /// 가져온 파일 하나를 되돌린다 — 그 파일에서 만든 거래와 그에 걸린 전송 연결까지 함께 지운다.
+    ///
+    /// 거래만 남기고 파일만 지우면 「어디서 온 거래인지」를 알 수 없게 되고,
+    /// 거래만 지우고 링크를 두면 엔진이 「확정 링크의 출금 거래가 계산 대상에 없습니다」로 막는다.
+    /// 개인지갑 입고처럼 **링크 때문에 생긴 짝 이벤트**도 같이 지운다 — 남기면 없던 자산이 떠돈다.
+    ///
+    /// - Returns: 지운 (거래 수, 전송 연결 수)
+    @discardableResult
+    func deleteSourceFile(_ file: SourceFileEntity, project: ProjectEntity) throws -> (events: Int, links: Int) {
+        let fileID = file.id
+        var doomedEventIDs = Set(project.events.filter { $0.sourceFileID == fileID }.map(\.id))
+
+        // 이 거래에 걸린 링크 + 그 링크로 생겨난 개인지갑 이벤트
+        var doomedLinks: [TransferLinkEntity] = []
+        for link in project.links {
+            guard doomedEventIDs.contains(link.fromEventID) || doomedEventIDs.contains(link.toEventID) else { continue }
+            doomedLinks.append(link)
+            for counterpartID in [link.fromEventID, link.toEventID] where !doomedEventIDs.contains(counterpartID) {
+                if let counterpart = project.events.first(where: { $0.id == counterpartID }),
+                   counterpart.sourceKind == MatchingService.walletSourceKind {
+                    doomedEventIDs.insert(counterpartID)
+                }
+            }
+        }
+
+        for link in doomedLinks {
+            project.links.removeAll { $0 === link }
+            modelContext.delete(link)
+        }
+        let doomedEvents = project.events.filter { doomedEventIDs.contains($0.id) }
+        for event in doomedEvents {
+            project.events.removeAll { $0 === event }
+            modelContext.delete(event)
+        }
+        project.sourceFiles.removeAll { $0 === file }
+        modelContext.delete(file)
+        try modelContext.save()
+        return (doomedEvents.count, doomedLinks.count)
+    }
+
     /// 제네릭용: 파일 헤더 행 추출
     func peekHeaders(url: URL) throws -> [String] {
         let ext = url.pathExtension.lowercased()

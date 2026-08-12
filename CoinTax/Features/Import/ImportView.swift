@@ -26,6 +26,8 @@ struct ImportView: View {
     @State private var showPDFPassword = false
     @State private var genericTimeZone = "UTC"
     @State private var showGuide = false
+    /// 빼기 확인을 기다리는 파일
+    @State private var pendingDelete: SourceFileEntity?
 
     var body: some View {
         Page(title: "자료 넣기", subtitle: "거래소에서 받은 파일을 그대로 넣으면 됩니다") {
@@ -244,7 +246,8 @@ struct ImportView: View {
     }
 
     private var filesCard: some View {
-        Card(title: "가져온 파일", systemImage: "doc.on.doc") {
+        Card(title: "가져온 파일", systemImage: "doc.on.doc",
+             footnote: "잘못 넣었으면 «빼기»로 되돌릴 수 있습니다. 그 파일에서 만든 거래와 전송 연결이 함께 지워집니다.") {
             let files = (env.currentProject?.sourceFiles ?? []).sorted { $0.importedAt > $1.importedAt }
             if files.isEmpty {
                 Text("아직 없습니다.").font(Theme.body).foregroundStyle(.secondary)
@@ -256,17 +259,63 @@ struct ImportView: View {
                             .font(.system(size: 12))
                         VStack(alignment: .leading, spacing: 1) {
                             Text(f.fileName).font(Theme.body).lineLimit(1).truncationMode(.middle)
-                            Text(Fmt.dateTime(f.importedAt)).font(Theme.caption).foregroundStyle(.secondary)
+                            HStack(spacing: 5) {
+                                Text(Fmt.dateTime(f.importedAt))
+                                Text("· 거래 \(eventCount(of: f))건")
+                            }
+                            .font(Theme.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
                         if let excluded = Self.excludedCount(f.metaJSON), excluded > 0 {
                             Pill(text: "제외 \(excluded)", tone: .warning)
                         }
                         Pill(text: parserLabel(f.parserID), tone: .neutral)
+                        Button("빼기") { pendingDelete = f }
+                            .buttonStyle(.borderless).controlSize(.small)
+                            .foregroundStyle(.secondary)
+                            .help("이 파일과 여기서 만든 거래를 지웁니다")
                     }
                     .padding(.vertical, 3)
                 }
             }
+        }
+        // 되돌릴 수 없는 삭제다 — 무엇이 몇 건 지워지는지 보여주고 확인받는다
+        .confirmationDialog(
+            "«\(pendingDelete?.fileName ?? "")» 을 뺄까요?",
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("빼기 (거래 \(pendingDelete.map { eventCount(of: $0) } ?? 0)건 함께 삭제)", role: .destructive) {
+                if let f = pendingDelete { removeFile(f) }
+                pendingDelete = nil
+            }
+            Button("취소", role: .cancel) { pendingDelete = nil }
+        } message: {
+            Text("이 파일에서 만든 거래와 그에 걸린 전송 연결이 함께 지워집니다. 되돌릴 수 없고, 다시 넣으려면 파일을 한 번 더 가져와야 합니다.")
+        }
+    }
+
+    private func eventCount(of file: SourceFileEntity) -> Int {
+        (env.currentProject?.events ?? []).filter { $0.sourceFileID == file.id }.count
+    }
+
+    private func removeFile(_ file: SourceFileEntity) {
+        guard let project = env.currentProject else { return }
+        let name = file.fileName
+        do {
+            let removed = try env.importService.deleteSourceFile(file, project: project)
+            env.invalidateCalculation()
+            lastPreview = []
+            lastDetect = nil
+            batchLines = []
+            batchTone = .neutral
+            var parts = ["\(name) 을 뺐습니다 — 거래 \(removed.events)건 삭제"]
+            if removed.links > 0 { parts.append("전송 연결 \(removed.links)건 해제") }
+            message = parts.joined(separator: " · ")
+            messageTone = .neutral
+        } catch {
+            message = "\(name) 을 빼지 못했습니다 — \(error.localizedDescription)"
+            messageTone = .danger
         }
     }
 
