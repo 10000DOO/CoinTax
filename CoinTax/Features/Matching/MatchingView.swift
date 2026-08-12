@@ -165,9 +165,24 @@ struct MatchingView: View {
                 }
             }
             if !unmatchedDeposits.isEmpty {
-                Text("받은 것 \(unmatchedDeposits.count)건").font(Theme.caption.weight(.semibold)).foregroundStyle(.secondary)
-                ForEach(unmatchedDeposits.prefix(10), id: \.id) { e in
+                HStack {
+                    Text("받은 것 \(unmatchedDeposits.count)건")
+                        .font(Theme.caption.weight(.semibold)).foregroundStyle(.secondary)
+                    Spacer()
+                    if walletReceivable > 0 {
+                        Button("전부 개인지갑에서 (\(walletReceivable))") { receiveAllFromWallet() }
+                            .buttonStyle(.bordered).controlSize(.small)
+                    }
+                }
+                Text("**개인지갑에서 되가져온 것**이면 「개인지갑에서」를 누르세요 — 지갑에 남아 있던 산 값이 이어집니다. "
+                     + "지갑이 그 시점에 그 코인을 갖고 있을 때만 누를 수 있습니다.")
+                    .font(Theme.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(unmatchedDeposits.prefix(20), id: \.id) { e in
                     unmatchedRow(e, outgoing: false)
+                }
+                if unmatchedDeposits.count > 20 {
+                    Text("외 \(unmatchedDeposits.count - 20)건").font(Theme.caption).foregroundStyle(.secondary)
                 }
             }
         }
@@ -190,9 +205,26 @@ struct MatchingView: View {
                 Button("개인지갑으로") { moveToWallet(e) }
                     .buttonStyle(.bordered).controlSize(.small)
                     .help("거래소 밖 내 지갑으로 보낸 것으로 처리합니다. 산 값이 지갑으로 이어지고, 전송 자체는 세금이 붙지 않습니다")
+            } else if canReceiveFromWallet(e) {
+                Button("개인지갑에서") { receiveFromWallet(e) }
+                    .buttonStyle(.bordered).controlSize(.small)
+                    .help("개인지갑에 있던 코인을 거래소로 되가져온 것으로 처리합니다. 지갑에 남아 있던 산 값이 이어집니다")
             }
         }
         .padding(.vertical, 1)
+    }
+
+    /// 그 시점 개인지갑에 그 코인이 충분히 있어야 「개인지갑에서」를 누를 수 있다.
+    /// 없는데 누르면 없던 자산을 만들어 내는 셈이라 음수 재고로 계산이 막힌다.
+    private func canReceiveFromWallet(_ e: LedgerEventEntity) -> Bool {
+        guard let project = env.currentProject, e.baseAsset.uppercased() != "KRW" else { return false }
+        let qty = Money.abs(Decimal(string: e.quantity) ?? 0)
+        guard qty > 0 else { return false }
+        return env.matchingService.walletBalance(asset: e.baseAsset, at: e.timestamp, project: project) >= qty
+    }
+
+    private var walletReceivable: Int {
+        unmatchedDeposits.filter { canReceiveFromWallet($0) }.count
     }
 
     // MARK: 수동 연결
@@ -366,6 +398,40 @@ struct MatchingView: View {
         env.invalidateCalculation()
         refresh()
         set(failed == 0 ? "\(ok)건을 개인지갑으로 옮겼습니다." : "\(ok)건 처리 · \(failed)건 실패",
+            failed == 0 ? .positive : .warning)
+    }
+
+    private func receiveFromWallet(_ e: LedgerEventEntity) {
+        guard let project = env.currentProject else { return }
+        do {
+            try env.matchingService.receiveFromWallet(deposit: e, project: project)
+            env.invalidateCalculation()
+            refresh()
+            set("개인지갑에서 받은 것으로 처리했습니다 — 산 값이 이어집니다.", .positive)
+        } catch let err as CoinTaxError {
+            set(err.errorDescription ?? "처리하지 못했습니다", .danger)
+        } catch {
+            set(error.localizedDescription, .danger)
+        }
+    }
+
+    private func receiveAllFromWallet() {
+        guard let project = env.currentProject else { return }
+        var ok = 0
+        var failed = 0
+        // 시간 순으로 처리해야 한다 — 뒤 건을 먼저 처리하면 앞 건에서 지갑 잔고가 모자란다
+        for e in unmatchedDeposits.sorted(by: { $0.timestamp < $1.timestamp }) {
+            guard canReceiveFromWallet(e) else { continue }
+            do {
+                try env.matchingService.receiveFromWallet(deposit: e, project: project)
+                ok += 1
+            } catch {
+                failed += 1
+            }
+        }
+        env.invalidateCalculation()
+        refresh()
+        set(failed == 0 ? "\(ok)건을 개인지갑에서 받은 것으로 처리했습니다." : "\(ok)건 처리 · \(failed)건 실패",
             failed == 0 ? .positive : .warning)
     }
 

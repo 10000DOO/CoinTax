@@ -171,17 +171,118 @@ final class MatchingService {
         return entity
     }
 
+    /// 개인지갑이 그 시점에 들고 있던 수량. 지갑에 없는 코인을 「지갑에서 왔다」고 하면
+    /// 없던 자산을 만들어 내는 셈이라 음수 재고(V-QTY-02)로 계산이 막힌다.
+    func walletBalance(asset: String, at moment: Date, project: ProjectEntity) -> Decimal {
+        guard let wallet = project.accounts.first(where: { $0.exchangeCode == ExchangeCode.wallet.rawValue }) else {
+            return 0
+        }
+        let code = AssetSymbol(asset).code
+        return project.events
+            .filter { $0.accountID == wallet.id && AssetSymbol($0.baseAsset).code == code && $0.timestamp <= moment }
+            .reduce(Decimal(0)) { sum, e in
+                let qty = Money.abs(Decimal(string: e.quantity) ?? 0)
+                switch e.type {
+                case EventType.deposit.rawValue, EventType.income.rawValue, EventType.buy.rawValue:
+                    return sum + qty
+                case EventType.withdrawal.rawValue, EventType.sell.rawValue:
+                    return sum - qty
+                default:
+                    return sum
+                }
+            }
+    }
+
+    /// 상대 출금이 없는 입금을 **개인지갑에서 들여온 것**으로 처리한다. `moveToWallet` 의 반대 방향.
+    ///
+    /// 지갑에는 거래소 같은 출금 기록이 없어서 자동 후보가 잡히지 않는다. 그대로 두면
+    /// 그 입금이 「출처 없는 입금 = 취득가 0원」이 되어 **팔 때 판 금액 전부가 이익**으로 잡힌다.
+    ///
+    /// - Parameter sentQty: 지갑에서 보낸 수량. 생략하면 받은 수량 그대로(네트워크 수수료 0 가정).
+    @discardableResult
+    func receiveFromWallet(deposit: LedgerEventEntity, project: ProjectEntity, sentQty: Decimal? = nil) throws -> LedgerEventEntity {
+        guard deposit.type == EventType.deposit.rawValue else {
+            throw CoinTaxError.parserReject("입금 거래만 개인지갑에서 받은 것으로 처리할 수 있습니다")
+        }
+        guard deposit.baseAsset.uppercased() != "KRW" else {
+            throw CoinTaxError.parserReject("원화 입금은 가상자산 전송이 아닙니다")
+        }
+        let already = project.links.contains {
+            $0.toEventID == deposit.id && $0.status == LinkStatus.confirmed.rawValue
+        }
+        guard !already else {
+            throw CoinTaxError.parserReject("이미 다른 출금에 연결된 입금입니다")
+        }
+        let received = Money.abs(Decimal(string: deposit.quantity) ?? 0)
+        guard received > 0 else {
+            throw CoinTaxError.parserReject("수량이 0인 입금은 처리할 수 없습니다")
+        }
+        let sent = sentQty.map { Money.abs($0) } ?? received
+        guard sent >= received else {
+            throw CoinTaxError.parserReject("보낸 수량은 받은 수량 이상이어야 합니다")
+        }
+        guard let wallet = project.accounts.first(where: { $0.exchangeCode == ExchangeCode.wallet.rawValue }) else {
+            throw CoinTaxError.parserReject("개인지갑에 아직 아무것도 없습니다 — 거래소 출금을 먼저 개인지갑으로 지정하세요")
+        }
+        guard wallet.id != deposit.accountID else {
+            throw CoinTaxError.parserReject("개인지갑 자신에게 들어온 입금입니다")
+        }
+        let available = walletBalance(asset: deposit.baseAsset, at: deposit.timestamp, project: project)
+        guard available >= sent else {
+            throw CoinTaxError.parserReject(
+                "이 시점 개인지갑의 \(AssetSymbol(deposit.baseAsset).code) 보유(\(Money.decimalString(available)))보다 많습니다 — 다른 곳에서 온 입금일 수 있습니다"
+            )
+        }
+
+        var event = LedgerEvent(
+            projectID: ProjectID(project.id),
+            accountID: AccountID(wallet.id),
+            timestamp: deposit.timestamp,
+            type: .withdrawal,
+            baseAsset: AssetSymbol(deposit.baseAsset),
+            quantity: -sent,
+            network: deposit.network,
+            addressHash: deposit.addressHash,
+            txidHash: deposit.txidHash,
+            memo: "개인지갑 출고 (직접 지정)",
+            sourceKind: Self.walletSourceKind,
+            // 같은 시각이면 원장 정렬이 rawRef 로 갈린다. 출고가 입고보다 앞서도록 접두사를 나눈다.
+            rawRef: "wallet-out:\(deposit.id.uuidString)"
+        )
+        event.fingerprint = Fingerprint.make(for: event, parserID: Self.walletSourceKind)
+        let entity = EntityMappers.makeEntity(from: event)
+        entity.project = project
+        project.events.append(entity)
+        modelContext.insert(entity)
+
+        let link = TransferLinkEntity(
+            fromEventID: entity.id,
+            toEventID: deposit.id,
+            status: LinkStatus.confirmed.rawValue,
+            withdrawnQty: Money.decimalString(sent),
+            receivedQty: Money.decimalString(received)
+        )
+        link.score = 1.0
+        link.note = "개인지갑"
+        link.project = project
+        project.links.append(link)
+        modelContext.insert(link)
+        try modelContext.save()
+        return entity
+    }
+
     /// F-MT-02 매칭 해제
     ///
-    /// 개인지갑 입고는 이 연결 때문에 만들어진 이벤트다. 연결만 끊고 이벤트를 남기면
-    /// 「출처 없는 입금 = 취득가 0원」이 원장에 그대로 남는다.
+    /// 개인지갑 쪽 기록은 이 연결 때문에 만들어진 이벤트다 (입고든 출고든).
+    /// 연결만 끊고 이벤트를 남기면 「출처 없는 입금 = 취득가 0원」이나
+    /// 「상대 없는 출금 = 원가 소멸」이 원장에 그대로 남는다.
     func unlink(_ link: TransferLinkEntity, project: ProjectEntity) throws {
-        let toID = link.toEventID
+        let endpointIDs = [link.fromEventID, link.toEventID]
         project.links.removeAll { $0 === link }
         modelContext.delete(link)
-        if let arrival = project.events.first(where: { $0.id == toID && $0.sourceKind == Self.walletSourceKind }) {
-            project.events.removeAll { $0 === arrival }
-            modelContext.delete(arrival)
+        for generated in project.events.filter({ endpointIDs.contains($0.id) && $0.sourceKind == Self.walletSourceKind }) {
+            project.events.removeAll { $0 === generated }
+            modelContext.delete(generated)
         }
         try modelContext.save()
     }
