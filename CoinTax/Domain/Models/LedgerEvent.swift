@@ -31,6 +31,13 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
     /// OKX `Balance Change`는 차감 **후** 값이다. 엔진이 base 수수료를 한 번 더 빼면
     /// OKX 쪽 수량이 이중으로 줄어든다(리뷰 1-1). 파서가 이 플래그로 관례를 흡수한다.
     var quantityIsNetOfFee: Bool
+    /// 거래소가 원본에 찍어준 **이 거래 직후 잔고** (기초자산). 없으면 nil.
+    ///
+    /// 거래소 자기 장부의 값이라 우리 코드와 독립이다. 검증기가 매 거래마다 대조해
+    /// 파싱 오류·이벤트 누락·수량 규칙 오해를 **자동으로** 잡는다 (V-BAL).
+    var balanceAfter: Decimal?
+    /// 견적자산 잔고 (OKX 거래내역처럼 한 주문에 두 자산 잔고가 다 있는 경우)
+    var quoteBalanceAfter: Decimal?
 
     init(
         id: EventID = EventID(),
@@ -57,7 +64,9 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
         sourceKind: String,
         rawRef: String? = nil,
         needsFX: Bool = false,
-        quantityIsNetOfFee: Bool = false
+        quantityIsNetOfFee: Bool = false,
+        balanceAfter: Decimal? = nil,
+        quoteBalanceAfter: Decimal? = nil
     ) {
         self.id = id
         self.projectID = projectID
@@ -84,6 +93,8 @@ struct LedgerEvent: Identifiable, Codable, Sendable {
         self.rawRef = rawRef
         self.needsFX = needsFX
         self.quantityIsNetOfFee = quantityIsNetOfFee
+        self.balanceAfter = balanceAfter
+        self.quoteBalanceAfter = quoteBalanceAfter
     }
 }
 

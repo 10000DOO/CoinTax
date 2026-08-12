@@ -49,7 +49,9 @@ enum EntityMappers {
             sourceKind: e.sourceKind,
             rawRef: e.rawRef,
             needsFX: e.needsFX,
-            quantityIsNetOfFee: e.quantityIsNetOfFee
+            quantityIsNetOfFee: e.quantityIsNetOfFee,
+            balanceAfter: e.balanceAfter.flatMap { Decimal(string: $0) },
+            quoteBalanceAfter: e.quoteBalanceAfter.flatMap { Decimal(string: $0) }
         )
     }
 
@@ -93,6 +95,8 @@ enum EntityMappers {
         entity.rawRef = event.rawRef
         entity.needsFX = event.needsFX
         entity.quantityIsNetOfFee = event.quantityIsNetOfFee
+        entity.balanceAfter = event.balanceAfter.map { Money.decimalString($0) }
+        entity.quoteBalanceAfter = event.quoteBalanceAfter.map { Money.decimalString($0) }
     }
 
     static func makeEntity(from event: LedgerEvent) -> LedgerEventEntity {

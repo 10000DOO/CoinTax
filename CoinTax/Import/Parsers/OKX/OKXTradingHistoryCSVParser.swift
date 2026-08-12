@@ -31,13 +31,16 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
             return row[idx]
         }
 
-        var events: [LedgerEvent] = []
+        // 파일 안 위치를 함께 들고 다닌다. 주문(Spot)은 여러 행이 묶이므로 딕셔너리로 모으는데,
+        // 그대로 꺼내면 순서가 매번 달라지고 **입금과 그 돈으로 한 매수의 순서가 뒤집힌다**.
+        var pending: [(fileIndex: Int, event: LedgerEvent)] = []
         var warnings: [String] = []
         var ignored = 0
 
         // Transfer rows → individual events
         // Spot rows → group by Order id
         var spotGroups: [String: [[String]]] = [:]
+        var spotFirstIndex: [String: Int] = [:]
 
         var transferCount = 0
         for (i, row) in lines.dropFirst(2).enumerated() {
@@ -67,20 +70,23 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
                     quantity: qty,
                     memo: action,
                     sourceKind: parserID,
-                    rawRef: "row\(i+3)"
+                    rawRef: "row\(i+3)",
+                    balanceAfter: Money.parseDecimal(col(row, "Balance"))
                 )
                 e.fingerprint = Fingerprint.make(for: e, parserID: parserID)
-                events.append(e)
+                pending.append((fileIndex: i, event: e))
                 transferCount += 1
             } else if tradeType == "Spot" {
                 let oid = col(row, "Order id")
                 spotGroups[oid, default: []].append(row)
+                if spotFirstIndex[oid] == nil { spotFirstIndex[oid] = i }
             } else {
                 ignored += 1
             }
         }
 
-        for (oid, group) in spotGroups {
+        for oid in spotGroups.keys.sorted(by: { (spotFirstIndex[$0] ?? 0) < (spotFirstIndex[$1] ?? 0) }) {
+            guard let group = spotGroups[oid] else { continue }
             guard let first = group.first else { continue }
             let symbol = col(first, "Symbol") // BTC-USDT
             let parts = symbol.split(separator: "-").map(String.init)
@@ -98,6 +104,9 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
             var time: Date?
             var actionHint = ""
             var amountBase: Decimal = 0   // Amount 컬럼 합 (base 레그) — 순액 판정에 쓴다
+            // 주문 직후 잔고 — 우리 계산의 정답지 (V-BAL).
+            // 한 주문이 여러 행으로 쪼개지므로 **각 자산의 마지막 행** 값을 쓴다 (id 가 클수록 나중).
+            var lastBalance: [String: (id: String, value: Decimal)] = [:]
 
             for row in group {
                 let unit = col(row, "Balance Unit")
@@ -118,6 +127,15 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
                 // `Trading Unit` 은 견적 레그에도 base 가 적혀 있는 파일이 있어 기준으로 쓸 수 없다.
                 if unit == base {
                     amountBase += Money.abs(Money.parseDecimal(col(row, "Amount")) ?? 0)
+                }
+                if !unit.isEmpty, let bal = Money.parseDecimal(col(row, "Balance")) {
+                    let rid = col(row, "id")
+                    // id 는 숫자 문자열이다. 자릿수가 다르면 문자열 비교가 뒤집히므로 길이를 먼저 본다.
+                    func isLater(_ a: String, than b: String) -> Bool {
+                        a.count != b.count ? a.count > b.count : a > b
+                    }
+                    if let prev = lastBalance[unit], !isLater(rid, than: prev.id) { continue }
+                    lastBalance[unit] = (id: rid, value: bal)
                 }
             }
 
@@ -175,22 +193,24 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
                 feeAsset: feeBase > 0 ? feeAsset.map { AssetSymbol($0) } : nil,
                 sourceKind: parserID,
                 rawRef: "order:\(oid)",
-                quantityIsNetOfFee: isNet
+                quantityIsNetOfFee: isNet,
+                balanceAfter: lastBalance[base]?.value,
+                quoteBalanceAfter: lastBalance[quote]?.value
             )
             e.fingerprint = Fingerprint.make(for: e, parserID: parserID)
-            events.append(e)
+            pending.append((fileIndex: spotFirstIndex[oid] ?? 0, event: e))
         }
 
         if transferCount > 0 {
             warnings.append("Transfer \(transferCount)건은 거래소 내부 이동(거래↔펀딩 계정)으로 처리했습니다. 국내↔해외 전송 매칭에는 OKX Funding History의 Deposit/Withdrawal이 필요합니다.")
         }
 
+        // 파일 순서로 되돌린 뒤 시간 오름차순으로 바로잡는다.
+        // OKX 파일은 최신순이라, 파일 순서를 그대로 두면 같은 시각의 이동·체결이 거꾸로 들어간다.
+        let fileOrdered = pending.sorted { $0.fileIndex < $1.fileIndex }.map(\.event)
         return ParseResult(
             parserID: parserID,
-            events: events.sorted {
-                if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
-                return ($0.rawRef ?? "") < ($1.rawRef ?? "")
-            },
+            events: RowOrder.chronological(fileOrdered),
             meta: ["timezone": metaLine, "ignoredCount": "\(ignored)", "internalTransfers": "\(transferCount)"],
             warnings: warnings,
             errors: [],

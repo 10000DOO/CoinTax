@@ -107,6 +107,11 @@ final class LedgerEventEntity {
     var needsFX: Bool
     /// 선언부 기본값 필수 — 기존 저장소를 경량 마이그레이션으로 열기 위함 (docs/fix-review-findings.md §8)
     var quantityIsNetOfFee: Bool = false
+    /// 거래소가 원본에 찍어준 **이 거래 직후 잔고** (기초자산). 없으면 nil.
+    /// 우리 계산의 **외부 정답지**다 — 검증기가 매 거래마다 대조한다 (V-BAL).
+    var balanceAfter: String? = nil
+    /// 같은 행에 견적자산 잔고가 함께 있으면 그 값 (OKX 거래내역의 quote leg)
+    var quoteBalanceAfter: String? = nil
     var project: ProjectEntity?
 
     init(id: UUID = UUID(), accountID: UUID, fingerprint: String, timestamp: Date, type: String, baseAsset: String, quantity: String, sourceKind: String) {

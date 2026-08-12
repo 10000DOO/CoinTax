@@ -120,34 +120,8 @@ enum Verifier {
             expectedQty[key] = (expectedQty[key] ?? 0) + delta
         }
         for e in input.events where e.type != .ignored {
-            let qty = Money.abs(e.quantity)
-            switch e.type {
-            case .buy:
-                var net = qty
-                if !e.quantityIsNetOfFee, let fa = e.feeAsset, fa == e.baseAsset, let fee = e.feeAmount {
-                    net = max(0, qty - Money.abs(fee))
-                }
-                bump(e.accountID, e.baseAsset, net)
-            case .deposit, .income:
-                bump(e.accountID, e.baseAsset, qty)
-            case .sell:
-                bump(e.accountID, e.baseAsset, -qty)
-            case .withdrawal:
-                bump(e.accountID, e.baseAsset, -qty)
-                if !e.quantityIsNetOfFee, let fee = e.feeAmount, fee > 0,
-                   e.feeAsset == nil || e.feeAsset == e.baseAsset {
-                    bump(e.accountID, e.baseAsset, -Money.abs(fee))
-                }
-            case .transferInternal, .fee, .fiatDeposit, .fiatWithdraw, .other, .ignored:
-                break
-            }
-            // 코인↔코인 매매의 견적자산 leg — 매수는 나가고 매도는 들어온다
-            if let quote = e.quoteAsset, let quoteQty = e.cryptoQuoteQuantity {
-                bump(e.accountID, quote, e.type == .buy ? -quoteQty : quoteQty)
-            }
-            if let fa = e.feeAsset, let fee = e.feeAmount, fee != 0,
-               feeReducesBook(e, feeAsset: fa) {
-                bump(e.accountID, fa, -Money.abs(fee))
+            for change in LedgerDelta.bookChanges(for: e) {
+                bump(e.accountID, change.asset, change.delta)
             }
         }
         var actualQty: [String: Decimal] = [:]
@@ -166,6 +140,34 @@ enum Verifier {
                     context: key.split(separator: "|").last.map(String.init)
                 ))
             }
+        }
+
+        // ── V-BAL 거래소가 찍어준 잔고와 대조 ──────────────────────────
+        //
+        // 여기까지의 검사는 전부 **우리 코드가 우리 코드를 검사**한다. 같은 오해를 공유하면
+        // 다 같이 통과한다. 거래소 잔고는 우리 코드 밖에서 온 값이라 그 고리를 끊는다.
+        for f in BalanceReconciler.reconcile(events: input.events) {
+            switch f.kind {
+            case .openingBalance:
+                issues.append(.init(
+                    id: "V-BAL-02", severity: "critical",
+                    message: "\(f.asset.code) \(Money.decimalString(f.exchangeValue))가 이 자료가 시작되기 전부터 있었습니다 — 취득원가를 알 수 없어 세금이 실제보다 커집니다. 더 이전 기간 원본을 함께 가져오세요",
+                    context: "\(f.asset.code) \(TaxTime.dayKST(f.at))"
+                ))
+            case .drift:
+                issues.append(.init(
+                    id: "V-BAL-01", severity: "critical",
+                    message: "거래소가 찍어준 \(f.asset.code) 잔고와 앱 계산이 다릅니다 (거래소 \(Money.decimalString(f.exchangeValue)) / 앱 \(Money.decimalString(f.computedValue))) — 이 거래 앞쪽에 빠지거나 잘못 읽은 내역이 있습니다",
+                    context: "\(f.asset.code) \(TaxTime.dayKST(f.at)) \(f.rawRef ?? "")"
+                ))
+            }
+        }
+        if !BalanceReconciler.hasAnyPrintedBalance(input.events) {
+            issues.append(.init(
+                id: "V-BAL-03", severity: "warning",
+                message: "가져온 원본에 거래소 잔고 열이 없어 외부 대조를 하지 못했습니다 — 내부 정합성만 확인했습니다",
+                context: nil
+            ))
         }
 
         // ── V-QTY-02 음수 재고 ─────────────────────────────────────────
@@ -234,39 +236,9 @@ enum Verifier {
         // ── V-DEM-01/02 의제 ───────────────────────────────────────────
         var preTaxQty: [String: Decimal] = [:]
         for e in input.events where e.type != .ignored && e.timestamp < tTax {
-            let qty = Money.abs(e.quantity)
-            guard !e.baseAsset.isKRW else { continue }
-            let key = "\(e.accountID.raw.uuidString)|\(e.baseAsset.code)"
-            switch e.type {
-            case .buy:
-                var net = qty
-                if !e.quantityIsNetOfFee, let fa = e.feeAsset, fa == e.baseAsset, let fee = e.feeAmount {
-                    net = max(0, qty - Money.abs(fee))
-                }
-                preTaxQty[key] = (preTaxQty[key] ?? 0) + net
-            case .deposit, .income:
-                preTaxQty[key] = (preTaxQty[key] ?? 0) + qty
-            case .sell:
-                preTaxQty[key] = (preTaxQty[key] ?? 0) - qty
-            case .withdrawal:
-                var outQty = qty
-                if !e.quantityIsNetOfFee, let fee = e.feeAmount, fee > 0,
-                   e.feeAsset == nil || e.feeAsset == e.baseAsset {
-                    outQty += Money.abs(fee)
-                }
-                preTaxQty[key] = (preTaxQty[key] ?? 0) - outQty
-            default:
-                break
-            }
-            // 코인↔코인 매매의 견적자산 leg
-            if let quote = e.quoteAsset, let quoteQty = e.cryptoQuoteQuantity {
-                let quoteKey = "\(e.accountID.raw.uuidString)|\(quote.code)"
-                preTaxQty[quoteKey] = (preTaxQty[quoteKey] ?? 0) + (e.type == .buy ? -quoteQty : quoteQty)
-            }
-            if let fa = e.feeAsset, let fee = e.feeAmount, fee != 0,
-               feeReducesBook(e, feeAsset: fa) {
-                let feeKey = "\(e.accountID.raw.uuidString)|\(fa.code)"
-                preTaxQty[feeKey] = (preTaxQty[feeKey] ?? 0) - Money.abs(fee)
+            for change in LedgerDelta.bookChanges(for: e) {
+                let key = "\(e.accountID.raw.uuidString)|\(change.asset.code)"
+                preTaxQty[key] = (preTaxQty[key] ?? 0) + change.delta
             }
         }
         for d in r.deemedPositions {
@@ -280,8 +252,24 @@ enum Verifier {
                 ))
             }
             if let m = d.marketUnitKRW {
-                if d.deemedUnitKRW != max(d.bookUnitKRW, m) {
-                    issues.append(.init(id: "V-DEM-02", severity: "critical", message: "의제 단가 max 위반", context: d.asset.code))
+                // 「실제 취득가와 시가 중 큰 값」이 하한이다.
+                //
+                // 매입 건별(perLot) 방식에서 lot 이 둘 이상이면 채택 단가는 lot 별 max 의 **가중평균**이라
+                // 하한보다 커지는 게 정상이다. 같아야 한다고 보면 정상 계산이 Critical 로 막힌다.
+                //
+                // 원 단위 비교도 정확히 하지 않는다 — 단가는 나눗셈에서 나오므로 마지막 자리가 흔들린다.
+                let floorUnit = max(d.bookUnitKRW, m)
+                let tolerance = max(Money.abs(floorUnit) * Decimal(string: "0.000001")!, 1)
+                let perLotMixed = d.basisMode == DeemedBasisMode.perLot.rawValue && d.lotCount > 1
+                let ok = perLotMixed
+                    ? d.deemedUnitKRW >= floorUnit - tolerance
+                    : Money.abs(d.deemedUnitKRW - floorUnit) <= tolerance
+                if !ok {
+                    issues.append(.init(
+                        id: "V-DEM-02", severity: "critical",
+                        message: "의제 단가가 «실제 취득가·시가 중 큰 값»보다 작습니다 (채택 \(Money.decimalString(d.deemedUnitKRW)) / 하한 \(Money.decimalString(floorUnit)))",
+                        context: d.asset.code
+                    ))
                 }
             }
         }
@@ -405,23 +393,6 @@ enum Verifier {
             issues: dedupe(issues),
             calculatedAt: Date()
         )
-    }
-
-    /// 이 수수료가 **수수료 자산 장부의 수량을 별도로 줄이는가**.
-    ///
-    /// 엔진 `CostBasisEngine.feeCostKRW` 와 규칙이 반드시 같아야 한다. 어긋나면 정상 계산이
-    /// 「이벤트 수량 합과 보유 수량이 다릅니다」로 막힌다.
-    ///
-    /// - 원화 수수료: 장부와 무관 (금액일 뿐)
-    /// - 매수의 기초자산 수수료: 받는 수량에서 이미 차감했다 → 다시 빼지 않는다
-    /// - 매도의 기초자산 수수료: 체결 수량과 **별도로** 빠진다 → 뺀다
-    ///   (원본이 이미 순액인 판본 `quantityIsNetOfFee` 만 예외)
-    /// - 그 밖의 코인 수수료(USDT·BNB…): 항상 뺀다
-    private static func feeReducesBook(_ e: LedgerEvent, feeAsset fa: AssetSymbol) -> Bool {
-        guard e.type == .buy || e.type == .sell, !fa.isKRW else { return false }
-        guard fa == e.baseAsset else { return true }
-        if e.type == .buy { return false }
-        return !e.quantityIsNetOfFee
     }
 
     /// 같은 ID·메시지·문맥이 반복되면 하나로 합친다 (SwiftUI 목록 식별자 중복 방지 — 리뷰 4-6)

@@ -82,6 +82,6 @@ struct BinanceDepositXLSXParser: ExchangeDocumentParser {
             e.fingerprint = Fingerprint.make(for: e, parserID: parserID)
             events.append(e)
         }
-        return ParseResult(parserID: parserID, events: events, meta: ["timezone": tz.identifier], warnings: warnings, errors: [], ignoredCount: ignored)
+        return ParseResult(parserID: parserID, events: RowOrder.chronological(events), meta: ["timezone": tz.identifier], warnings: warnings, errors: [], ignoredCount: ignored)
     }
 }

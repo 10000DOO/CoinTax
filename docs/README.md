@@ -70,3 +70,14 @@
 ## 저장소
 
 로컬 개인 사용 프로젝트. 실거래 원본은 커밋하지 않는다 (`.gitignore` 참조).
+
+## 실행하기 전에 (개발자)
+
+```bash
+./scripts/smoke.sh                              # PII 검사 + 빌드 + 테스트 (162건)
+python3 scripts/binance-expected-balances.py    # 바이낸스 잔고 정답지 재생성 (실원본 필요)
+```
+
+`scripts/binance-expected-balances.py` 는 바이낸스 원본에서 **앱 코드를 전혀 쓰지 않고** 잔고를
+다시 계산해 정답지를 만든다. 빗썸·OKX 는 원본에 잔고 열이 있어 앱이 자동으로 대조하지만
+(V-BAL), 바이낸스 화면 CSV 에는 그 열이 없어 사각지대라서다.

@@ -308,6 +308,110 @@ final class AuditFixTests: XCTestCase {
     }
 }
 
+// MARK: - A-11 거래소 파일은 최신순이다 — 시간 오름차순으로 바로잡아야 한다
+
+final class RowOrderTests: XCTestCase {
+    private let projectID = ProjectID()
+
+    private func event(_ day: Int, _ ref: String) -> LedgerEvent {
+        LedgerEvent(
+            projectID: projectID, accountID: AccountID(),
+            timestamp: TaxTime.dateKST(year: 2027, month: 3, day: day),
+            type: .buy, baseAsset: AssetSymbol("BTC"), quantity: 1,
+            sourceKind: "t", rawRef: ref
+        )
+    }
+
+    func testNewestFirstFileIsReversed() {
+        let file = [event(5, "row1"), event(3, "row2"), event(1, "row3")]   // 최신순
+        let out = RowOrder.chronological(file)
+        XCTAssertEqual(out.map { TaxTime.dayKST($0.timestamp) },
+                       ["2027-03-01", "2027-03-03", "2027-03-05"])
+        // 원본 위치는 남아 있어야 한다 (사용자가 원본에서 그 행을 찾을 수 있어야 한다)
+        XCTAssertEqual(out.map { $0.rawRef ?? "" },
+                       ["s00001|row3", "s00002|row2", "s00003|row1"])
+    }
+
+    func testOldestFirstFileKeepsOrder() {
+        let file = [event(1, "row1"), event(3, "row2"), event(5, "row3")]
+        let out = RowOrder.chronological(file)
+        XCTAssertEqual(out.map { $0.rawRef ?? "" },
+                       ["s00001|row1", "s00002|row2", "s00003|row3"])
+    }
+
+    /// 같은 시각 안에서도 순서가 뒤집히면 안 된다.
+    /// 실데이터에서 이것 때문에 「매수에 쓴 입금이 그 매수보다 뒤에」 처리됐다.
+    func testSameInstantOrderIsReversedTogether() {
+        let t = TaxTime.dateKST(year: 2027, month: 3, day: 3, hour: 10)
+        func at(_ ref: String) -> LedgerEvent {
+            LedgerEvent(projectID: projectID, accountID: AccountID(), timestamp: t,
+                        type: .buy, baseAsset: AssetSymbol("BTC"), quantity: 1,
+                        sourceKind: "t", rawRef: ref)
+        }
+        // 파일: [최신, 중간, 오래된] + 방향 판정용으로 뒤에 더 오래된 행
+        let file = [at("row1"), at("row2"), at("row3"), event(1, "row4")]
+        let out = RowOrder.chronological(file)
+        XCTAssertEqual(out.map { $0.rawRef ?? "" },
+                       ["s00001|row4", "s00002|row3", "s00003|row2", "s00004|row1"])
+    }
+
+    /// 정렬 결과가 엔진의 순서 규칙(시각 → rawRef)과 어긋나지 않아야 한다
+    func testStampedRefsSortConsistentlyWithEngine() {
+        let file = (1...30).reversed().map { event($0 % 10 + 1, "row\($0)") }
+        let out = RowOrder.chronological(file)
+        let engineSorted = out.sorted {
+            if $0.timestamp != $1.timestamp { return $0.timestamp < $1.timestamp }
+            return ($0.rawRef ?? "") < ($1.rawRef ?? "")
+        }
+        XCTAssertEqual(out.map(\.id), engineSorted.map(\.id), "엔진이 다시 정렬해도 순서가 바뀌면 안 된다")
+    }
+}
+
+// MARK: - A-12 거래소가 찍어준 잔고를 실제로 읽어 오는가
+
+final class PrintedBalanceTests: XCTestCase {
+    private func synthetic(_ name: String) -> URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("docs/samples/synthetic/\(name)")
+    }
+
+    func testOKXFundingCarriesAfterBalance() throws {
+        let text = try String(contentsOf: synthetic("okx_funding_history_sample.csv"), encoding: .utf8)
+        let result = try OKXFundingHistoryCSVParser().parse(
+            text: text, fileName: "okx_funding_history_sample.csv",
+            projectID: ProjectID(), accountID: AccountID()
+        )
+        XCTAssertFalse(result.events.isEmpty)
+        XCTAssertTrue(result.events.allSatisfy { $0.balanceAfter != nil }, "After Balance 를 읽어야 한다")
+        // 잔고 대조가 이 파일에서 어긋남을 보고하면 안 된다 (파일 자체가 정합적이다)
+        XCTAssertTrue(BalanceReconciler.reconcile(events: result.events).isEmpty,
+                      BalanceReconciler.reconcile(events: result.events).map { "\($0.kind) \($0.asset.code)" }.joined(separator: ", "))
+    }
+
+    func testOKXTradingCarriesBothLegBalances() throws {
+        let text = try String(contentsOf: synthetic("okx_trading_history_sample.csv"), encoding: .utf8)
+        let result = try OKXTradingHistoryCSVParser().parse(
+            text: text, fileName: "okx_trading_history_sample.csv",
+            projectID: ProjectID(), accountID: AccountID()
+        )
+        let trade = try XCTUnwrap(result.events.first { $0.type == .buy || $0.type == .sell })
+        XCTAssertNotNil(trade.balanceAfter, "기초자산 잔고")
+        XCTAssertNotNil(trade.quoteBalanceAfter, "견적자산 잔고")
+    }
+
+    /// 잔고 열이 없는 원본만 있으면 「대조를 못 했다」고 알려야 한다 — 조용히 통과하면 안 된다
+    func testMissingBalanceColumnsAreReported() throws {
+        let text = try String(contentsOf: synthetic("binance_spot_sample.csv"), encoding: .utf8)
+        let result = try BinanceSpotXLSXParser().parse(
+            text: text, fileName: "binance_spot_sample.csv",
+            projectID: ProjectID(), accountID: AccountID()
+        )
+        XCTAssertFalse(BalanceReconciler.hasAnyPrintedBalance(result.events))
+        XCTAssertTrue(BalanceReconciler.reconcile(events: result.events).isEmpty)
+    }
+}
+
 // MARK: - A-09 개인지갑으로 보낸 코인은 산 값이 따라가야 한다
 
 @MainActor

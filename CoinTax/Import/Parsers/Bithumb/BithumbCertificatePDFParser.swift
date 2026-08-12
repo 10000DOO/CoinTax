@@ -66,7 +66,8 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
             }
             return ParseResult(
                 parserID: parserID,
-                events: events.sorted { $0.timestamp < $1.timestamp },
+                // 확인서는 최신 거래가 위에 온다 → 시간 오름차순으로 바로잡고 순번을 새긴다
+                events: RowOrder.chronological(events),
                 meta: ["rows": "\(events.count)", "mode": "layout"],
                 warnings: warnings,
                 errors: errors,
@@ -119,7 +120,7 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
         }
         return ParseResult(
             parserID: parserID,
-            events: events.sorted { $0.timestamp < $1.timestamp },
+            events: RowOrder.chronological(events),
             meta: ["rows": "\(events.count)"],
             warnings: warnings,
             errors: errors,
@@ -285,6 +286,11 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
         let tradeAmount = isTrade ? cells[2].value : cells[1].value
         let settlement = isTrade ? cells[3].value : cells[2].value
 
+        // 뒤에 남은 칸은 확인서의 「가상자산 잔고」·「통화별 잔고」다.
+        // 거래소가 자기 장부로 찍어준 값이라 **우리 계산의 정답지**가 된다 (V-BAL).
+        // 자리로 세지 않고 **단위 토큰이 그 자산인 칸**을 고른다 — 열 구성이 판본마다 다를 수 있다.
+        let assetBalance = cells.dropFirst(needed).first { $0.unit == asset }?.value ?? ""
+
         if isTrade,
            let q = Money.parseDecimal(qty), let p = Money.parseDecimal(price), let amt = Money.parseDecimal(tradeAmount) {
             let expected = q * p
@@ -297,7 +303,7 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
         }
 
         return .success(MergedRow(
-            parts: [date, time, asset, kind, qty, price, tradeAmount, settlement, memo.joined(separator: " ")],
+            parts: [date, time, asset, kind, qty, price, tradeAmount, settlement, memo.joined(separator: " "), assetBalance],
             rawRef: rawRef
         ))
     }
@@ -333,7 +339,8 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
     // MARK: - 2단 레이아웃 병합 (텍스트 폴백)
 
     struct MergedRow {
-        var parts: [String]   // date, time, asset, type, qty, price, tradeAmt, settle, memo
+        /// date, time, asset, type, qty, price, tradeAmt, settle, memo, **assetBalanceAfter**
+        var parts: [String]
         var rawRef: String
     }
 
@@ -414,14 +421,15 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
             let asset = units.first(where: { $0 != "KRW" }) ?? units.first ?? "KRW"
 
             // 숫자열 = [거래수량, 체결가격, 거래금액, 정산금액, 가상자산잔고, 통화별잔고]
-            // 앞의 4개만 쓰고, 부족하면 있는 것까지만 채운다.
+            // 앞의 4개를 쓰고, 다섯 번째가 있으면 잔고 대조(V-BAL)용으로 함께 넘긴다.
             let qty = numbers.count > 0 ? numbers[0] : ""
             let price = numbers.count > 1 ? numbers[1] : ""
             let tradeAmt = numbers.count > 2 ? numbers[2] : ""
             let settle = numbers.count > 3 ? numbers[3] : (numbers.count > 2 ? numbers[2] : "")
+            let assetBalance = numbers.count > 4 ? numbers[4] : ""
 
             out.append(MergedRow(
-                parts: [date, time, asset, kind, qty, price, tradeAmt, settle, memoParts.joined(separator: " ")],
+                parts: [date, time, asset, kind, qty, price, tradeAmt, settle, memoParts.joined(separator: " "), assetBalance],
                 rawRef: "line\(block.startLine)"
             ))
         }
@@ -439,6 +447,8 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
         let tradeAmount = parts.count > 6 ? Money.parseDecimal(parts[6]) : nil
         let settle = parts.count > 7 ? Money.parseDecimal(parts[7]) : (parts.count > 6 ? Money.parseDecimal(parts[6]) : nil)
         let memo = parts.count > 8 ? parts[8] : ""
+        // 확인서가 찍어준 「가상자산 잔고」 — 우리 계산의 정답지 (V-BAL)
+        let balanceAfter = parts.count > 9 ? Money.parseDecimal(parts[9]) : nil
 
         let ts = CSVUtil.parseDate("\(date) \(time)", timeZone: TaxTime.seoul, formats: ["yyyy-MM-dd HH:mm:ss"])
             ?? CSVUtil.parseDate("\(date) \(time)", timeZone: TaxTime.seoul, formats: ["yyyy-MM-dd HH:mm"])
@@ -527,7 +537,8 @@ struct BithumbCertificatePDFParser: ExchangeDocumentParser {
             memo: memo.isEmpty ? nil : memo,
             counterpartyHint: hint,
             sourceKind: parserID,
-            rawRef: rawRef
+            rawRef: rawRef,
+            balanceAfter: balanceAfter
         )
         e.fingerprint = Fingerprint.make(for: e, parserID: parserID)
         return e

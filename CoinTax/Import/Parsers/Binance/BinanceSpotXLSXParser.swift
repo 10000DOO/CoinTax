@@ -105,7 +105,7 @@ struct BinanceSpotXLSXParser: ExchangeDocumentParser {
             e.fingerprint = Fingerprint.make(for: e, parserID: parserID)
             events.append(e)
         }
-        return ParseResult(parserID: parserID, events: events, meta: ["timezone": tz.identifier], warnings: warnings, errors: [], ignoredCount: 0)
+        return ParseResult(parserID: parserID, events: RowOrder.chronological(events), meta: ["timezone": tz.identifier], warnings: warnings, errors: [], ignoredCount: 0)
     }
 
     // MARK: - 거래내역 화면 CSV (Time, Pair, Side, Price, Executed, Amount, Fee)
@@ -192,7 +192,7 @@ struct BinanceSpotXLSXParser: ExchangeDocumentParser {
         }
         return ParseResult(
             parserID: parserID,
-            events: events,
+            events: RowOrder.chronological(events),
             meta: ["timezone": tz.identifier, "variant": "trade-screen-csv"],
             warnings: warnings,
             errors: [],

@@ -562,7 +562,13 @@ struct CostBasisEngine {
             guard !newLots.isEmpty else { continue }
 
             let deemedTotal = newLots.reduce(Decimal(0)) { $0 + $1.qty * $1.unitCost }
-            let deemedUnit = Money.isApproxZero(qty) ? 0 : deemedTotal / qty
+            // lot 이 하나면 단가를 **그대로** 쓴다. 곱했다가 다시 나누면 소수 자릿수 한계 때문에
+            // 원래 단가로 정확히 돌아오지 않고, 검증기의 「의제 단가 max」 검사가 정상 계산을
+            // Critical 로 막는다 (무작위 시나리오 테스트에서 발견).
+            let deemedUnit: Decimal = {
+                if newLots.count == 1 { return newLots[0].unitCost }
+                return Money.isApproxZero(qty) ? 0 : deemedTotal / qty
+            }()
             // 건별 방식에서는 lot 마다 채택 근거가 갈릴 수 있다 → 그대로 표기한다
             let reason: String = {
                 guard let m = market else { return "actual" }

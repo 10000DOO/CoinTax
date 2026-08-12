@@ -84,14 +84,16 @@ struct OKXFundingHistoryCSVParser: ExchangeDocumentParser {
                 quantity: qty,
                 memo: typeStr,
                 sourceKind: parserID,
-                rawRef: "row\(i+3)"
+                rawRef: "row\(i+3)",
+                // OKX 가 찍어준 `After Balance` — 우리 계산의 정답지 (V-BAL)
+                balanceAfter: Money.parseDecimal(col(row, "After Balance"))
             )
             e.fingerprint = Fingerprint.make(for: e, parserID: parserID)
             events.append(e)
         }
         return ParseResult(
             parserID: parserID,
-            events: events,
+            events: RowOrder.chronological(events),
             meta: ["timezone": metaLine],
             warnings: warnings,
             errors: [],
