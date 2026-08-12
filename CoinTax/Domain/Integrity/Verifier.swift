@@ -236,9 +236,29 @@ enum Verifier {
             issues.append(.init(id: "V-COST-03", severity: "critical", message: "전송 소실 필요경비 금지 위반", context: nil))
         }
         // 소실 원가가 필요경비 합계에 섞여 들어가지 않았는지 (총원가 = 취득 + 수수료 + 추가공제)
-        let costFromDisposals = s.disposals.reduce(Decimal(0)) { $0 + $1.costKRW + $1.feesKRW } + s.extraDeductibleKRW
-        if Money.abs(costFromDisposals - s.totalCostsKRW) > 1 {
-            issues.append(.init(id: "V-COST-03", severity: "critical", message: "필요경비 합계가 건별 합과 다릅니다 (소실 원가 혼입 의심)", context: nil))
+        //
+        // 예전에는 `s.disposals` 로 다시 더해 `s.totalCostsKRW` 와 비교했다. 그런데 집계기가
+        // `totalCostsKRW` 를 만드는 식이 글자 하나까지 같아서 **정의상 실패할 수 없는 검사**였다
+        // (감사 G-1 — 검사 항목이 하나 있는 것처럼 보이지만 아무것도 검사하지 않았다).
+        //
+        // 이제 요약이 아니라 **엔진 결과(`r.disposals`)에서 그 해 것만 골라** 다시 더한다.
+        // 집계기의 연도 필터가 틀리거나 다른 해 처분이 섞이면 여기서 잡힌다.
+        let yearDisposals = r.disposals.filter { $0.taxYear == s.taxYear }
+        let costFromEngine = yearDisposals.reduce(Decimal(0)) { $0 + $1.costKRW + $1.feesKRW } + s.extraDeductibleKRW
+        if Money.abs(costFromEngine - s.totalCostsKRW) > 1 {
+            issues.append(.init(
+                id: "V-COST-03", severity: "critical",
+                message: "필요경비 합계가 엔진이 기록한 건별 합과 다릅니다 (소실 원가 혼입 또는 연도 필터 오류)",
+                context: "엔진 \(Money.decimalString(costFromEngine)) / 요약 \(Money.decimalString(s.totalCostsKRW))"
+            ))
+        }
+        // 건수도 함께 본다 — 금액이 우연히 맞고 건수만 틀어지는 경우가 있다
+        if yearDisposals.count != s.disposals.count {
+            issues.append(.init(
+                id: "V-COST-03", severity: "critical",
+                message: "그 해 처분 건수가 엔진 결과와 다릅니다",
+                context: "엔진 \(yearDisposals.count)건 / 요약 \(s.disposals.count)건"
+            ))
         }
 
         // ── V-DEM-01/02 의제 ───────────────────────────────────────────
