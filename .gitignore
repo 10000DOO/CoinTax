@@ -47,6 +47,8 @@ attachments/
 
 # 사용자 실 export / import 작업 디렉터리 (저장소 루트만 — CoinTax/Import 소스와 구분)
 docs/samples/raw/
+docs/raw/
+/raw/
 /Import/
 /UserData/
 /Secrets/
@@ -54,6 +56,23 @@ docs/samples/raw/
 /LocalData/
 **/raw-exports/
 **/user-imports/
+# 한글 폴더로 받아두는 경우 (거래내역 / 입출금 내역 …)
+**/거래내역/
+**/입출금*/
+**/원본/
+
+# 실거래 수치를 단정값으로 들고 있는 회귀 테스트 (실파일이 있어야만 도는 로컬 전용)
+CoinTaxTests/RealDataTests.swift
+
+# 앱이 내보낸 신고자료·계산 결과
+**/CoinTax-Report*
+**/신고자료*
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+*.store
+*.store-shm
+*.store-wal
 
 # 거래소·세무 원본 (형식 불문)
 *.csv
