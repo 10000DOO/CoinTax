@@ -4,273 +4,380 @@ import UniformTypeIdentifiers
 
 struct SettingsView: View {
     @EnvironmentObject private var env: AppEnvironment
-    @State private var fxDay = "2027-01-02"
-    @State private var fxRate = "1400"
-    @State private var marketAsset = "USDT"
-    @State private var marketPrice = "1400"
-    @State private var message = ""
-    @State private var autoFX = FXPreferences.autoFetchEnabled
-    @State private var ecosKey = FXKeychain.loadECOSKey() ?? ""
-    @State private var showManual = false
-    @State private var isFXCSVImporter = false
-    /// 화면 본문에서 계산하면 렌더링마다 전체 이벤트를 변환한다 (리뷰 6-2) → 상태로 캐시
-    @State private var missingFXDays: [String] = []
-    @State private var allowPublicFX = FXPreferences.allowPublicFallback
-    @State private var deemedMode = DeemedPreferences.basisMode
+
+    // 환율
+    @State private var autoFetch = FXPreferences.autoFetchEnabled
+    @State private var allowPublic = FXPreferences.allowPublicFallback
+    @State private var ecosKeyInput = ""
+    @State private var savedKeyMask: String? = FXKeychain.maskedECOSKey()
+    @State private var keyMessage: String?
+    @State private var keyMessageTone: Tone = .neutral
+    @State private var showKeyEditor = false
     @State private var showECOSGuide = false
+    @State private var testing = false
+
+    @State private var missingFXDays: [String] = []
+    @State private var fxDay = ""
+    @State private var fxRate = ""
+    @State private var showFXImporter = false
+
+    // 시가
+    @State private var marketAsset = ""
+    @State private var marketPrice = ""
+    @State private var missingMarket: [String] = []
+
+    // 의제 방식
+    @State private var deemedMode = DeemedPreferences.basisMode
+
+    @State private var message: String?
+    @State private var busy = false
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                Text("설정")
-                    .font(.largeTitle.bold())
+        Page(title: "설정", subtitle: "환율과 시가를 채우면 계산이 완성됩니다") {
+        } content: {
+            if let message { Banner(text: message, tone: .neutral, systemImage: "info.circle.fill") }
+            exchangeRateCard
+            marketPriceCard
+            deemedModeCard
+            privacyCard
+        }
+        .onAppear { refresh() }
+        .fileImporter(isPresented: $showFXImporter,
+                      allowedContentTypes: [.commaSeparatedText, .plainText],
+                      allowsMultipleSelection: false) { importFXCSV($0) }
+    }
 
-                GroupBox("세금 계산 가정 (읽기 전용)") {
-                    ForEach(TaxCopy.all, id: \.self) { t in
-                        Text("• \(t)").font(.caption).padding(.bottom, 4)
-                    }
-                    LabeledContent("PolicyBundle", value: env.policies.id)
-                }
+    // MARK: - 환율
 
-                GroupBox("USD/KRW 환율") {
-                    Toggle("자동 환율 조회 (기본 켜짐)", isOn: $autoFX)
-                        .onChange(of: autoFX) { _, on in
-                            env.fxService.autoFetchEnabled = on
-                            FXPreferences.autoFetchEnabled = on
-                        }
-                    Text("계산 시 누락된 거래일 환율을 **한국은행 ECOS**에서 가져옵니다. 인증키가 없으면 자동 조회를 하지 않고 수동 입력·CSV 가져오기를 안내합니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("휴일·주말 등 미고시일: 국세청 서삼46015-11986 취지에 따라 직전 고시일 기준환율을 적용하고 적용 고시일(sourceDate)을 기록합니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        HStack {
-                            Text("한국은행 ECOS 인증키 (Keychain 저장)")
-                                .font(.caption.weight(.semibold))
-                            if FXKeychain.loadECOSKey() == nil {
-                                Text("미등록")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.orange.opacity(0.25), in: Capsule())
-                                    .foregroundStyle(.orange)
-                            } else {
-                                Text("등록됨")
-                                    .font(.caption2.weight(.bold))
-                                    .padding(.horizontal, 6).padding(.vertical, 2)
-                                    .background(Color.green.opacity(0.22), in: Capsule())
-                                    .foregroundStyle(.green)
-                            }
-                        }
-                        SecureField("ECOS 인증키", text: $ecosKey)
-                        HStack {
-                            Button("키 저장") {
-                                FXKeychain.saveECOSKey(ecosKey)
-                                message = ecosKey.isEmpty ? "인증키를 삭제했습니다" : "인증키를 저장했습니다"
-                            }
-                            Button("삭제", role: .destructive) {
-                                ecosKey = ""
-                                FXKeychain.clearECOSKey()
-                                message = "인증키를 삭제했습니다"
-                            }
-                            Button(showECOSGuide ? "발급 방법 숨기기" : "발급 방법 보기") {
-                                showECOSGuide.toggle()
-                            }
-                            .buttonStyle(.borderless)
-                            Link("ECOS 열기", destination: URL(string: "https://ecos.bok.or.kr/api/")!)
-                        }
-
-                        if showECOSGuide {
-                            ecosGuide
+    private var exchangeRateCard: some View {
+        Card(
+            title: "환율",
+            systemImage: "dollarsign.arrow.circlepath",
+            footnote: "해외 거래소 거래는 그날의 원/달러 기준환율로 원화 환산합니다. 앱이 보내는 건 날짜와 통화쌍뿐이고 거래 내역은 나가지 않습니다."
+        ) {
+            HStack {
+                statusDot(missingFXDays.isEmpty ? .positive : .warning)
+                Text(missingFXDays.isEmpty ? "필요한 환율이 모두 있습니다" : "\(missingFXDays.count)일 부족")
+                    .font(Theme.body)
+                Spacer()
+                if !missingFXDays.isEmpty {
+                    Button {
+                        Task { await fillRemote() }
+                    } label: {
+                        HStack(spacing: 5) {
+                            if busy { ProgressView().controlSize(.small) }
+                            Text("자동으로 채우기")
                         }
                     }
-
-                    Divider()
-
-                    Toggle("공식 기준환율이 없을 때 공개 시세로 대체 (권장하지 않음)", isOn: $allowPublicFX)
-                        .onChange(of: allowPublicFX) { _, on in
-                            FXPreferences.allowPublicFallback = on
-                            message = on
-                                ? "공개 시세 대체를 허용했습니다 — 사용된 날짜는 리포트에 경고로 표시됩니다"
-                                : "공개 시세 대체를 끔 (한국은행 기준환율만 사용)"
-                        }
-                    Text("공개 시세는 외국환거래법상 기준환율이 아닙니다. 켜두면 계산은 진행되지만 리포트에 「참고 시세 사용」 경고가 남습니다. 자세한 배경은 「세무 확인」 화면의 TQ-05 항목을 보세요.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-
-                    if let project = env.currentProject {
-                        if !missingFXDays.isEmpty {
-                            Text("누락일 \(missingFXDays.count)일: \(missingFXDays.prefix(12).joined(separator: ", "))\(missingFXDays.count > 12 ? " …" : "")")
-                                .foregroundStyle(.orange)
-                                .font(.caption)
-                        }
-                        Button("지금 자동 채우기") {
-                            Task { await fillRemote(project: project) }
-                        }
-                        .help("누락일을 원격에서 채웁니다 (자동 설정이 꺼져 있어도 한 번 실행 가능)")
-
-                        Button("환율 CSV import…") { isFXCSVImporter = true }
-
-                        Button(showManual ? "수동 입력 숨기기" : "수동 입력 (옵션)") {
-                            showManual.toggle()
-                        }
-                        .buttonStyle(.borderless)
-
-                        if showManual {
-                            HStack {
-                                TextField("날짜 yyyy-MM-dd", text: $fxDay)
-                                TextField("환율", text: $fxRate)
-                                Button("수동 저장") { saveFX() }
-                            }
-                            Text("수동 값은 이후 자동 조회가 덮어쓰지 않습니다.")
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        }
-
-                        // day 가 중복될 수 있어 복합 식별자를 쓴다 (리뷰 4-6)
-                        ForEach(project.fxRates.sorted(by: { $0.day < $1.day }), id: \.persistentModelID) { r in
-                            Text("\(r.day) \(r.pair) = \(r.rate) (\(r.source)\(r.sourceDate.map { $0 == r.day ? "" : " ← \($0) 고시" } ?? ""))")
-                                .font(.caption.monospaced())
-                        }
-                    }
-                    Text("거래 원본은 기기에만 저장됩니다. 원격 조회는 날짜·통화쌍만 요청합니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                GroupBox("의제취득가 산정 방식") {
-                    Picker("비교 단위", selection: $deemedMode) {
-                        ForEach(DeemedBasisMode.allCases) { m in
-                            Text(m.label).tag(m)
-                        }
-                    }
-                    .pickerStyle(.radioGroup)
-                    .onChange(of: deemedMode) { _, m in
-                        // 설정값 한 곳만 바꾼다. 정책 번들은 PolicyBundle.current 가 매번 만든다.
-                        DeemedPreferences.basisMode = m
-                        env.invalidateCalculation()
-                        message = "의제 산정 방식을 바꿨습니다 — 리포트에서 재계산하세요"
-                    }
-                    Text(deemedMode.detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    if let alt = env.lastCalculation?.summary.deemedAlternative {
-                        Divider()
-                        Text("다른 방식(\(alt.basisLabel))으로 계산하면")
-                            .font(.caption.weight(.semibold))
-                        Text("의제 취득가 \(Money.decimalString(Money.roundKRW(alt.totalDeemedCostKRW))) 원 · 소득 \(Money.decimalString(Money.roundKRW(alt.netIncomeKRW))) 원 · 예상 세액 \(Money.decimalString(Money.roundKRW(alt.totalTaxKRW))) 원")
-                            .font(.caption.monospaced())
-                    }
-                    Text("어느 방식이 맞는지는 세무 확인이 필요합니다 (「세무 확인」 화면 TQ-01). 기본값은 세금이 다소 커지는 보수적인 쪽입니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                }
-
-                GroupBox("의제 시가") {
-                    // 마지막 계산에서 시가가 없어 막힌 자산을 먼저 보여준다 (14-spec §13)
-                    if let missing = env.lastCalculation?.replay.missingMarketAssets, !missing.isEmpty {
-                        Text("입력 필요: \(missing.map(\.code).joined(separator: ", "))")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.orange)
-                        HStack {
-                            ForEach(missing, id: \.code) { a in
-                                Button(a.code) { marketAsset = a.code }
-                                    .buttonStyle(.borderless)
-                            }
-                        }
-                    }
-                    HStack {
-                        TextField("자산", text: $marketAsset)
-                        TextField("KRW 단가", text: $marketPrice)
-                        Button("저장") { saveMarket() }
-                    }
-                    if let project = env.currentProject {
-                        ForEach(project.marketPrices.sorted(by: { $0.asset < $1.asset }), id: \.persistentModelID) { m in
-                            Text("\(m.asOf) \(m.asset) = \(m.priceKRW) (\(m.source))")
-                                .font(.caption.monospaced())
-                        }
-                    }
-                    Text("법령 기준: 소득세법 시행령 제88조제2항 — 시가고시 가상자산사업자 사업장에서 **2027-01-01 0시** 공시한 가격의 평균입니다. (「2026-12-31 종가」가 아닙니다.)")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                    Text("홈택스·손택스의 「가상자산 일평균가격 조회」로 값을 확인할 수 있습니다. 어느 거래소가 시가고시 사업자인지, 국내 미상장 코인은 어떻게 하는지는 세무 확인 항목(TQ-10)입니다.")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                }
-
-                if !message.isEmpty {
-                    Text(message).foregroundStyle(.secondary)
+                    .buttonStyle(.borderedProminent)
+                    .disabled(busy || env.currentProject == nil)
                 }
             }
-            .padding()
-        }
-        .onAppear {
-            autoFX = env.fxService.autoFetchEnabled
-            allowPublicFX = FXPreferences.allowPublicFallback
-            deemedMode = DeemedPreferences.basisMode
-            ecosKey = FXKeychain.loadECOSKey() ?? ""
-            refreshMissingFX()
-        }
-        .fileImporter(
-            isPresented: $isFXCSVImporter,
-            allowedContentTypes: [.commaSeparatedText, .plainText],
-            allowsMultipleSelection: false
-        ) { result in
-            importFXCSV(result)
+
+            if !missingFXDays.isEmpty {
+                Text(missingFXDays.prefix(14).joined(separator: "  ") + (missingFXDays.count > 14 ? "  외 \(missingFXDays.count - 14)일" : ""))
+                    .font(Theme.mono)
+                    .foregroundStyle(.secondary)
+                    .padding(8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(Theme.subtleBackground, in: RoundedRectangle(cornerRadius: 6))
+            }
+
+            Divider()
+            ecosKeySection
+            Divider()
+
+            DisclosureGroup("직접 넣기") {
+                VStack(alignment: .leading, spacing: Theme.gap) {
+                    HStack {
+                        TextField("2027-05-04", text: $fxDay).frame(width: 110)
+                        TextField("1380.5", text: $fxRate).frame(width: 90)
+                        Button("추가") { saveFX() }
+                            .disabled(fxDay.count < 8 || fxRate.isEmpty)
+                        Spacer()
+                        Button("CSV 가져오기…") { showFXImporter = true }
+                    }
+                    .textFieldStyle(.roundedBorder)
+                    Text("CSV 는 `날짜, 환율` 두 열이면 됩니다. 직접 넣은 값은 자동 조회가 덮어쓰지 않습니다.")
+                        .font(Theme.caption).foregroundStyle(.secondary)
+                }
+                .padding(.top, 6)
+            }
+            .font(Theme.body)
+
+            Toggle("계산할 때 자동으로 받아오기", isOn: $autoFetch)
+                .toggleStyle(.switch)
+                .font(Theme.body)
+                .onChange(of: autoFetch) { _, v in FXPreferences.autoFetchEnabled = v }
         }
     }
 
-    /// 한국은행 ECOS 인증키 발급 안내 (TQ-05)
-    @ViewBuilder
+    private var ecosKeySection: some View {
+        VStack(alignment: .leading, spacing: Theme.gap) {
+            HStack(spacing: 8) {
+                Image(systemName: savedKeyMask == nil ? "key" : "key.fill")
+                    .foregroundStyle(savedKeyMask == nil ? .secondary : Theme.positive)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("한국은행 ECOS 인증키").font(Theme.body.weight(.medium))
+                    if let mask = savedKeyMask {
+                        HStack(spacing: 5) {
+                            Text(mask).font(Theme.mono)
+                            Pill(text: "이 Mac 에만 · 암호화 저장", tone: .positive, systemImage: "lock.fill")
+                        }
+                    } else {
+                        Text("등록하면 누락된 환율을 자동으로 받아옵니다. 한 번만 넣으면 다음부터 기억합니다.")
+                            .font(Theme.caption).foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if savedKeyMask != nil {
+                    Button(testing ? "확인 중…" : "연결 확인") { Task { await testKey() } }
+                        .buttonStyle(.bordered).controlSize(.small).disabled(testing)
+                    Button("변경") { showKeyEditor = true; ecosKeyInput = "" }
+                        .buttonStyle(.bordered).controlSize(.small)
+                    Button("삭제", role: .destructive) { clearKey() }
+                        .buttonStyle(.bordered).controlSize(.small)
+                } else {
+                    Button("인증키 등록") { showKeyEditor = true; ecosKeyInput = "" }
+                        .buttonStyle(.borderedProminent).controlSize(.small)
+                }
+            }
+
+            if showKeyEditor {
+                VStack(alignment: .leading, spacing: 8) {
+                    SecureField("발급받은 인증키를 붙여넣으세요", text: $ecosKeyInput)
+                        .textFieldStyle(.roundedBorder)
+                    HStack {
+                        Button(showECOSGuide ? "발급 방법 접기" : "발급 방법 보기") { showECOSGuide.toggle() }
+                            .buttonStyle(.link).font(Theme.caption)
+                        Link("ecos.bok.or.kr 열기", destination: URL(string: "https://ecos.bok.or.kr/api/")!)
+                            .font(Theme.caption)
+                        Spacer()
+                        Button("취소") { showKeyEditor = false; ecosKeyInput = "" }
+                        Button("저장") { saveKey() }
+                            .buttonStyle(.borderedProminent)
+                            .disabled(ecosKeyInput.trimmingCharacters(in: .whitespaces).isEmpty)
+                    }
+                }
+                .padding(12)
+                .background(Theme.subtleBackground, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
+            }
+
+            if showECOSGuide { ecosGuide }
+
+            if let keyMessage {
+                HStack(spacing: 5) {
+                    Image(systemName: keyMessageTone == .danger ? "xmark.circle.fill" : "checkmark.circle.fill")
+                        .foregroundStyle(keyMessageTone.color)
+                    Text(keyMessage).font(Theme.caption).foregroundStyle(keyMessageTone.color)
+                }
+            }
+
+            Toggle("인증키가 없을 때 공개 시세로 대신 채우기", isOn: $allowPublic)
+                .toggleStyle(.checkbox)
+                .font(Theme.caption)
+                .onChange(of: allowPublic) { _, v in FXPreferences.allowPublicFallback = v }
+            Text("공개 시세는 외국환거래법상 기준환율이 아닙니다. 쓰면 리포트에 표시됩니다 (세무 확인 TQ-05).")
+                .font(Theme.caption).foregroundStyle(.secondary)
+        }
+    }
+
     private var ecosGuide: some View {
         VStack(alignment: .leading, spacing: 5) {
-            Text("발급 방법 (무료 · 보통 즉시 발급)")
-                .font(.caption.weight(.semibold))
-            Group {
-                Text("1. ecos.bok.or.kr 접속 → 상단 **오픈API** 메뉴")
-                Text("2. **인증키 신청** 선택")
-                Text("3. 이메일 주소와 사용 용도(예: 개인 세무 자료 정리)를 입력하고 신청")
-                Text("4. 메일로 받은 인증키를 위 칸에 붙여넣고 **키 저장**")
-                Text("5. 「지금 자동 채우기」를 눌러 정상 조회되는지 확인")
-            }
-            .font(.caption2)
-            Text("앱이 보내는 것은 날짜와 통화쌍뿐입니다. 거래 내역은 전송하지 않습니다.")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text("사용 통계표: 731Y001 (주요국 통화의 대원화 환율) · 항목 0000001 (원/미국달러) · 주기 일별")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-            Text("메뉴 이름은 사이트 개편에 따라 달라질 수 있습니다.")
-                .font(.caption2)
-                .foregroundStyle(.tertiary)
+            Text("인증키 발급 (무료 · 1분)").font(Theme.caption.weight(.semibold))
+            guideStep(1, "ecos.bok.or.kr 접속 → 상단 **오픈API**")
+            guideStep(2, "**인증키 신청** 선택")
+            guideStep(3, "이메일과 사용 용도(예: 개인 세무 자료 정리) 입력 후 신청")
+            guideStep(4, "메일로 받은 키를 위 칸에 붙여넣고 **저장**")
+            guideStep(5, "**연결 확인** 을 눌러 정상 조회되는지 확인")
+            Text("사용 통계표 731Y001 · 항목 0000001 (원/미국달러) · 일별. 메뉴 이름은 사이트 개편에 따라 달라질 수 있습니다.")
+                .font(Theme.caption).foregroundStyle(.tertiary)
+                .padding(.top, 2)
         }
-        .padding(8)
-        .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 6))
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Theme.subtleBackground, in: RoundedRectangle(cornerRadius: Theme.radiusSmall))
     }
 
-    private func refreshMissingFX() {
-        guard let project = env.currentProject else {
-            missingFXDays = []
-            return
+    private func guideStep(_ n: Int, _ text: String) -> some View {
+        HStack(alignment: .top, spacing: 6) {
+            Text("\(n)")
+                .font(.system(size: 9, weight: .bold))
+                .frame(width: 14, height: 14)
+                .background(Color.secondary.opacity(0.18), in: Circle())
+            Text(.init(text)).font(Theme.caption).foregroundStyle(.secondary)
         }
-        missingFXDays = env.fxService.missingDays(
-            for: env.projectService.domainEvents(for: project),
-            project: project
-        )
+    }
+
+    // MARK: - 2026-12-31 시가
+
+    private var marketPriceCard: some View {
+        Card(
+            title: "2026-12-31 시가",
+            systemImage: "clock.arrow.circlepath",
+            footnote: "과세는 2027-01-01 양도분부터입니다. 그 전부터 갖고 있던 코인은 «실제 산 값» 과 «이 시가» 중 큰 쪽을 취득가로 봅니다. 홈택스·손택스 「가상자산 일평균가격 조회」에서 확인할 수 있습니다."
+        ) {
+            HStack {
+                statusDot(missingMarket.isEmpty ? .positive : .warning)
+                Text(missingMarket.isEmpty ? "필요한 시가가 모두 있습니다" : "\(missingMarket.count)종 필요")
+                    .font(Theme.body)
+                Spacer()
+            }
+
+            if !missingMarket.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(missingMarket.prefix(10), id: \.self) { code in
+                        Button(code) { marketAsset = code }
+                            .buttonStyle(.bordered)
+                            .controlSize(.small)
+                    }
+                }
+            }
+
+            HStack {
+                TextField("자산 (BTC)", text: $marketAsset).frame(width: 110)
+                TextField("원 단위 가격", text: $marketPrice).frame(width: 130)
+                Button("저장") { saveMarket() }
+                    .disabled(marketAsset.isEmpty || marketPrice.isEmpty)
+                Spacer()
+            }
+            .textFieldStyle(.roundedBorder)
+
+            let saved = (env.currentProject?.marketPrices ?? []).filter { $0.asOf == "2026-12-31" }
+            if !saved.isEmpty {
+                Divider()
+                ForEach(saved.sorted { $0.asset < $1.asset }, id: \.id) { m in
+                    HStack {
+                        Text(m.asset).font(Theme.mono).frame(width: 70, alignment: .leading)
+                        Text(Fmt.unitPriceString(Decimal(string: m.priceKRW) ?? 0)).font(Theme.mono)
+                        Spacer()
+                        Button {
+                            env.modelContext.delete(m)
+                            try? env.modelContext.save()
+                            refresh()
+                        } label: { Image(systemName: "trash").font(.system(size: 10)) }
+                        .buttonStyle(.borderless)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - 의제 방식
+
+    private var deemedModeCard: some View {
+        Card(
+            title: "과세 시작 전 보유분 계산 방식",
+            systemImage: "arrow.triangle.branch",
+            footnote: "법령·국세청 안내에 어느 쪽인지 명시가 없습니다. 두 방식 결과를 리포트에 함께 보여줍니다 (세무 확인 TQ-01)."
+        ) {
+            Picker("", selection: $deemedMode) {
+                ForEach(DeemedBasisMode.allCases) { mode in
+                    Text(mode.label).tag(mode)
+                }
+            }
+            .pickerStyle(.radioGroup)
+            .labelsHidden()
+            .onChange(of: deemedMode) { _, v in
+                DeemedPreferences.basisMode = v
+                env.invalidateCalculation()
+            }
+            Text(deemedMode.detail)
+                .font(Theme.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    // MARK: - 개인정보
+
+    private var privacyCard: some View {
+        Card(title: "개인정보", systemImage: "lock.shield") {
+            privacyRow("거래 자료는 이 Mac 에만 저장됩니다", "서버로 보내지 않습니다.")
+            privacyRow("네트워크는 환율 조회에만 씁니다", "날짜와 통화쌍만 보냅니다.")
+            privacyRow("인증키는 키체인에 암호화 보관", "이 Mac 밖으로 백업·동기화되지 않습니다.")
+            privacyRow("가져온 파일의 작업용 사본은 즉시 삭제", "성명·계좌·지갑주소가 남지 않습니다.")
+        }
+    }
+
+    private func privacyRow(_ title: String, _ detail: String) -> some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "checkmark.circle.fill")
+                .font(.system(size: 11)).foregroundStyle(Theme.positive).padding(.top, 2)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(title).font(Theme.body)
+                Text(detail).font(Theme.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func statusDot(_ tone: Tone) -> some View {
+        Circle().fill(tone.color).frame(width: 7, height: 7)
+    }
+
+    // MARK: - 동작
+
+    private func refresh() {
+        autoFetch = FXPreferences.autoFetchEnabled
+        allowPublic = FXPreferences.allowPublicFallback
+        savedKeyMask = FXKeychain.maskedECOSKey()
+        deemedMode = DeemedPreferences.basisMode
+        let progress = SetupProgress.evaluate(env: env)
+        missingFXDays = progress.missingFXDays
+        missingMarket = progress.missingMarketAssets
+    }
+
+    private func saveKey() {
+        let result = FXKeychain.saveECOSKey(ecosKeyInput)
+        ecosKeyInput = ""
+        savedKeyMask = FXKeychain.maskedECOSKey()
+        keyMessage = result.message
+        keyMessageTone = result.isFailure ? .danger : .positive
+        if !result.isFailure {
+            showKeyEditor = false
+            showECOSGuide = false
+        }
+    }
+
+    private func clearKey() {
+        let result = FXKeychain.clearECOSKey()
+        savedKeyMask = nil
+        keyMessage = result.message
+        keyMessageTone = .neutral
+    }
+
+    /// 실제로 한 번 조회해 본다. 「저장됨」만으로는 키가 유효한지 알 수 없다.
+    private func testKey() async {
+        testing = true
+        defer { testing = false }
+        guard let key = FXKeychain.loadECOSKey() else { return }
+        let day = TaxTime.dayKST(Calendar.current.date(byAdding: .day, value: -7, to: Date()) ?? Date())
+        do {
+            let rates = try await ECOSFXClient(apiKey: key).fetchUSD_KRW(days: [day])
+            if rates.isEmpty {
+                keyMessage = "키가 거부되었거나 조회 결과가 없습니다. 발급 메일의 키를 다시 확인하세요."
+                keyMessageTone = .danger
+            } else {
+                keyMessage = "정상 조회됩니다 (\(rates.count)일)."
+                keyMessageTone = .positive
+            }
+        } catch {
+            keyMessage = "조회하지 못했습니다 — \(error.localizedDescription)"
+            keyMessageTone = .danger
+        }
     }
 
     private func importFXCSV(_ result: Result<[URL], Error>) {
         guard let project = env.currentProject else { return }
         do {
-            let urls = try result.get()
-            guard let url = urls.first else { return }
+            guard let url = try result.get().first else { return }
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
             let text = try String(contentsOf: url, encoding: .utf8)
             let n = try env.fxService.importRatesCSV(text: text, project: project)
-            refreshMissingFX()
-            message = "환율 CSV \(n)일 import"
+            refresh()
+            env.invalidateCalculation()
+            message = "환율 \(n)일을 가져왔습니다."
         } catch {
             message = error.localizedDescription
         }
@@ -281,8 +388,10 @@ struct SettingsView: View {
               let rate = Money.parseDecimal(fxRate) else { return }
         do {
             try env.fxService.setRate(day: fxDay, rate: rate, project: project, source: "manual")
-            refreshMissingFX()
-            message = "수동 환율 저장됨 (자동이 덮어쓰지 않음)"
+            fxDay = ""; fxRate = ""
+            refresh()
+            env.invalidateCalculation()
+            message = "환율을 저장했습니다. 자동 조회가 덮어쓰지 않습니다."
         } catch {
             message = error.localizedDescription
         }
@@ -294,7 +403,7 @@ struct SettingsView: View {
         // 장부 키와 같은 정규화를 거친다 (공백·별칭 티커 불일치 방지)
         let code = AssetSymbol(marketAsset).code
         guard !code.isEmpty else {
-            message = "자산 코드를 입력하세요"
+            message = "자산 코드를 입력하세요."
             return
         }
         if let existing = project.marketPrices.first(where: { AssetSymbol($0.asset).code == code && $0.asOf == "2026-12-31" }) {
@@ -306,28 +415,33 @@ struct SettingsView: View {
             env.modelContext.insert(e)
         }
         try? env.modelContext.save()
-        message = "시가 저장됨"
+        marketAsset = ""; marketPrice = ""
+        env.invalidateCalculation()
+        refresh()
+        message = "\(code) 시가를 저장했습니다."
     }
 
-    private func fillRemote(project: ProjectEntity) async {
-        let missing = env.fxService.missingDays(
-            for: env.projectService.domainEvents(for: project),
-            project: project
-        )
+    private func fillRemote() async {
+        guard let project = env.currentProject else { return }
+        busy = true
+        defer { busy = false }
         // 누락일이 없을 때 전체 거래일을 요청하면 수백~수천 번의 요청이 나간다 (리뷰 6-3)
-        let unique = Array(Set(missing)).sorted()
+        let unique = Array(Set(missingFXDays)).sorted()
         guard !unique.isEmpty else {
-            message = "채울 누락일이 없습니다"
+            message = "채울 날짜가 없습니다."
             return
         }
         do {
             let fetched = try await env.fxService.fillMissingFromRemote(days: unique, project: project, force: true)
             if fetched.isEmpty {
-                message = "원격에서 채운 날짜 없음 — ECOS 키 또는 네트워크를 확인하거나 수동 입력하세요"
+                message = FXKeychain.loadECOSKey() == nil
+                    ? "받아오지 못했습니다 — 한국은행 인증키를 등록하거나 직접 넣어 주세요."
+                    : "받아오지 못했습니다 — 인증키나 네트워크를 확인하세요."
             } else {
-                message = "자동 \(fetched.count)일 저장"
+                message = "환율 \(fetched.count)일을 받아왔습니다."
+                env.invalidateCalculation()
             }
-            refreshMissingFX()
+            refresh()
         } catch {
             message = error.localizedDescription
         }

@@ -47,7 +47,7 @@ struct CoinTaxApp: App {
             RootSplitView()
                 .environmentObject(env)
                 .modelContainer(env.modelContainer)
-                .frame(minWidth: 900, minHeight: 560)
+                .frame(minWidth: 980, minHeight: 660)
                 .alert(
                     "저장소를 열 수 없습니다",
                     isPresented: .constant(storeFailure != nil)

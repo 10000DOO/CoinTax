@@ -21,6 +21,8 @@ final class AppEnvironment: ObservableObject {
     }()
 
     @Published var currentProject: ProjectEntity?
+    /// 지금 보고 있는 화면. 홈의 체크리스트가 여기를 바꿔 해당 화면으로 보낸다.
+    @Published var section: AppSection = .home
     @Published var lastCalculation: CalculationResult?
     /// 계산 이후 데이터가 바뀌었는지. true 면 리포트·내보내기가 낡은 결과다.
     @Published var calculationStale = false
