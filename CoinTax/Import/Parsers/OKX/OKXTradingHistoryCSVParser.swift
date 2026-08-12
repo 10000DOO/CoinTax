@@ -99,7 +99,9 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
             var netBase: Decimal = 0
             var netQuote: Decimal = 0
             var feeBase: Decimal = 0
-            var feeAsset: String?
+            // 견적자산으로 낸 수수료. 매도는 견적자산을 **받는** 쪽이고 그 줄의 잔고 변동은
+            // 수수료를 이미 뺀 값이라(실측), 이걸 읽지 않으면 양도가액이 순액이 된다 (감사 D-6).
+            var feeQuote: Decimal = 0
             var price: Decimal?
             var time: Date?
             var actionHint = ""
@@ -116,7 +118,7 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
                 let fee = Money.parseDecimal(col(row, "Fee")) ?? 0
                 let fu = col(row, "Fee Unit")
                 if fu == base { feeBase += Money.abs(fee) }
-                if fee != 0 { feeAsset = fu }
+                if fu == quote { feeQuote += Money.abs(fee) }
                 if let p = Money.parseDecimal(col(row, "Filled Price")), p != 0 { price = p }
                 if time == nil {
                     time = CSVUtil.parseDate(col(row, "Time"), timeZone: tz, formats: ["yyyy-MM-dd HH:mm:ss"])
@@ -178,6 +180,26 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
                 qty = -Money.abs(Money.parseDecimal(col(first, "Amount")) ?? 0)
             }
 
+            // 수수료는 **받는 자산**에 붙고, 그 줄의 `Balance Change` 는 수수료를 이미 뺀 값이다.
+            // 매도는 견적자산을 받으므로 견적 수수료를 더해 **총액**으로 돌려놓는다 —
+            // 안 그러면 양도가액이 순액이 되어 빗썸·바이낸스(총액)와 한 신고서에서 기준이 갈린다
+            // (IMPLEMENTATION §6.4 총액 기준 통일 · 감사 D-6).
+            //
+            // 매수는 견적자산을 **내는** 쪽이라 그 유출액이 이미 총액이다. 그런데도 견적 수수료가
+            // 찍혀 있으면 관례를 벗어난 판본이므로 조정하지 않고 알린다 (이중 차감 방지).
+            let netQuoteAbs = Money.abs(netQuote)
+            var grossQuote = netQuoteAbs
+            if type == .sell { grossQuote += feeQuote }
+            if type == .buy, feeQuote > 0 {
+                warnings.append("주문 \(oid): 매수에 견적자산(\(quote)) 수수료가 붙어 있습니다 — 관례를 벗어난 판본이라 금액을 조정하지 않았습니다. 양도가액·필요경비를 확인하세요.")
+            }
+            if feeBase > 0, feeQuote > 0 {
+                warnings.append("주문 \(oid): 기초자산·견적자산 양쪽에 수수료가 붙어 있습니다 — \(type == .sell ? quote : base) 쪽만 반영했습니다.")
+            }
+            // 한 거래에 수수료 하나만 담을 수 있다. 받는 자산 쪽을 택한다.
+            let feeAmount: Decimal? = type == .sell ? (feeQuote > 0 ? feeQuote : nil) : (feeBase > 0 ? feeBase : nil)
+            let feeUnit: String? = type == .sell ? (feeQuote > 0 ? quote : nil) : (feeBase > 0 ? base : nil)
+
             var e = LedgerEvent(
                 projectID: projectID,
                 accountID: accountID,
@@ -188,9 +210,9 @@ struct OKXTradingHistoryCSVParser: ExchangeDocumentParser {
                 quoteAsset: AssetSymbol(quote),
                 quantity: qty,
                 price: price,
-                quoteAmount: Money.abs(netQuote) == 0 ? nil : Money.abs(netQuote),
-                feeAmount: feeBase > 0 ? feeBase : nil,
-                feeAsset: feeBase > 0 ? feeAsset.map { AssetSymbol($0) } : nil,
+                quoteAmount: grossQuote == 0 ? nil : grossQuote,
+                feeAmount: feeAmount,
+                feeAsset: feeUnit.map { AssetSymbol($0) },
                 sourceKind: parserID,
                 rawRef: "order:\(oid)",
                 quantityIsNetOfFee: isNet,
