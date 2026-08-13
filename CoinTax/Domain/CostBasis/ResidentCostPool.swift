@@ -151,4 +151,23 @@ final class ResidentCostPool {
         guard let unit = unitCost(asset: asset, year: year) else { return nil }
         return unit * qty
     }
+
+    /// 그 해 소실분의 원가 합계 (회수되지 않는 몫). 정산 전이면 0.
+    func abandonedCost(asset: String, year: Int) -> Decimal {
+        guard let unit = unitCost(asset: asset, year: year),
+              let qty = flows[asset]?[year]?.abandonedQty else { return 0 }
+        return unit * qty
+    }
+
+    /// 연도별 소실 원가 합계 (모든 자산)
+    func abandonedCostByYear() -> [Int: Decimal] {
+        var out: [Int: Decimal] = [:]
+        for (asset, byYear) in flows {
+            for (year, flow) in byYear where flow.abandonedQty > 0 {
+                guard let unit = unitCosts[asset]?[year] else { continue }
+                out[year, default: 0] += unit * flow.abandonedQty
+            }
+        }
+        return out
+    }
 }

@@ -34,6 +34,19 @@ struct CostBasisEngine {
         /// 이미 지나간 입금 이벤트. 입금이 출금보다 먼저 기록된 전송을 구분한다.
         var seenDeposits: Set<EventID> = []
 
+        // ── 거주자별 총평균법 (`[영]` §88①) ───────────────────────────────
+        //
+        // 계정별 장부(`books`)는 **수량과 재고 부족 검증**만 담당한다. 세금에 쓰이는 원가는
+        // 아래 풀이 정한다 — 거래소·지갑을 가리지 않고 한 풀로 묶고, 단가는 과세기간이
+        // 끝나야 정해진다(§92②4). 그래서 재생 중에는 수량·금액만 모으고, 재생이 끝난 뒤
+        // 정산해서 처분 원가를 채운다.
+        let pool = ResidentCostPool()
+        /// 코인으로 낸 수수료가 **취득원가에 더해지는** 몫 — 단가가 서로를 참조할 수 있어 수렴 계산한다
+        var feeIntoAcquisition: [(acquired: String, year: Int, feeAsset: String, feeQty: Decimal)] = []
+        /// 직전 `feeCostKRW` 호출이 처분한 코인 수수료. 호출 직후 읽는다
+        var lastCryptoFee: (asset: String, qty: Decimal)?
+        func yearOf(_ e: LedgerEvent) -> Int { TaxTime.calendarYearKST(e.timestamp) }
+
         // id 는 저장소에서 유일하지만, 방어적으로 첫 값을 채택한다 (중복 키로 프로세스가 죽지 않게)
         let eventsByID = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
 
@@ -205,6 +218,7 @@ struct CostBasisEngine {
         /// 장부 원가를 부대비용으로 쓰는 것은 「수수료 자산 처분손익 인식 + 시가를 필요경비로」와 값이 같다.
         /// (처분이익 = 시가 − 장부원가, 필요경비 = 시가 → 순효과 = −장부원가)
         func feeCostKRW(_ e: LedgerEvent, skipAsset: AssetSymbol? = nil) -> Decimal {
+            lastCryptoFee = nil
             guard let feeAmt = e.feeAmount, feeAmt != 0 else { return 0 }
             let amount = Money.abs(feeAmt)
             // 수수료 자산 칸이 비어 있으면 **원화로 본다.**
@@ -233,6 +247,10 @@ struct CostBasisEngine {
                 shortfallQty[bookKey(e.accountID, asset), default: 0] += out.shortfallQty
                 warnings.append("수수료 자산 \(asset.code) 장부 부족 \(Money.decimalString(out.shortfallQty)) — 그만큼 부대비용에 반영되지 않았습니다")
             }
+            // 풀에는 **실제로 지갑에서 빠진 전량**을 넘긴다. 계정 장부가 모자라도
+            // 같은 사람의 다른 계정에 있을 수 있다 — 거주자별로 묶는 게 §88① 이다.
+            pool.dispose(asset: asset.code, year: yearOf(e), qty: amount)
+            lastCryptoFee = (asset: asset.code, qty: amount)
             return out.costKRW
         }
 
@@ -265,10 +283,12 @@ struct CostBasisEngine {
                     let out = b.disposeClamped(qty: quoteQty)
                     abandonedTotal += out.costKRW
                     abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW
+                    pool.abandon(asset: quote.code, year: yearOf(e), qty: quoteQty)
                 }
                 // 매도(견적자산을 받는 쪽)는 원가 근거가 없어 0원으로 입고한다.
                 if e.type == .sell {
                     b.acquire(qty: quoteQty, costKRW: 0)
+                    pool.acquire(asset: quote.code, year: yearOf(e), qty: quoteQty, costKRW: 0)
                 }
                 issues.append(.init(
                     id: "V-FX-01", severity: "critical",
@@ -281,6 +301,7 @@ struct CostBasisEngine {
             switch e.type {
             case .buy:
                 let out = b.disposeClamped(qty: quoteQty)
+                pool.dispose(asset: quote.code, year: yearOf(e), qty: quoteQty)
                 if out.shortfallQty > Money.qtyEpsilon {
                     shortfallQty[bookKey(e.accountID, quote), default: 0] += out.shortfallQty
                     let dust = Money.isDustShortfall(out.shortfallQty, of: quoteQty)
@@ -311,6 +332,7 @@ struct CostBasisEngine {
                 ))
             case .sell:
                 b.acquire(qty: quoteQty, costKRW: quoteKRW)
+                pool.acquire(asset: quote.code, year: yearOf(e), qty: quoteQty, costKRW: quoteKRW)
             default:
                 break
             }
@@ -352,12 +374,19 @@ struct CostBasisEngine {
                         ))
                     }
                     book(for: e.accountID, asset: e.baseAsset).acquire(qty: qty, costKRW: cost)
+                    // 풀에는 원화로 확정된 몫만 넣는다. 코인으로 낸 수수료 몫은 그 코인의
+                    // 단가가 정해져야 알 수 있어 따로 적어 두고 정산 때 더한다.
+                    pool.acquire(asset: e.baseAsset.code, year: yearOf(e), qty: qty, costKRW: quoteKRW ?? 0)
+                    if let cf = lastCryptoFee {
+                        feeIntoAcquisition.append((acquired: e.baseAsset.code, year: yearOf(e), feeAsset: cf.asset, feeQty: cf.qty))
+                    }
 
                 case .sell:
                     let qty = Money.abs(e.quantity)
                     let b = book(for: e.accountID, asset: e.baseAsset)
                     let costBefore = b.totalCost
                     let out = b.disposeClamped(qty: qty)
+                    pool.dispose(asset: e.baseAsset.code, year: yearOf(e), qty: qty)
                     if out.shortfallQty > Money.qtyEpsilon {
                         shortfallQty[bookKey(e.accountID, e.baseAsset), default: 0] += out.shortfallQty
                         let dust = Money.isDustShortfall(out.shortfallQty, of: qty)
@@ -446,6 +475,7 @@ struct CostBasisEngine {
                         context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp))"
                     ))
                     book(for: e.accountID, asset: e.baseAsset).acquire(qty: Money.abs(e.quantity), costKRW: 0)
+                    pool.acquire(asset: e.baseAsset.code, year: yearOf(e), qty: Money.abs(e.quantity), costKRW: 0)
 
                 case .withdrawal:
                     if e.baseAsset.isKRW { continue }
@@ -469,9 +499,11 @@ struct CostBasisEngine {
                     // **어느 자산으로 냈는지는 규칙 한 벌이 정한다** — 원화나 제3코인으로 적혀 있으면
                     // 이 코인은 줄지 않는다. 예전에는 연결 안 된 출금에서 그 조건이 빠져 있었다.
                     var explicitFee: Decimal = 0
+                    var explicitFeeQty: Decimal = 0
                     if let feeQty = LedgerDelta.withdrawalFeeQuantity(e) {
                         let feeOut = b.disposeClamped(qty: feeQty)
                         explicitFee = feeOut.costKRW
+                        explicitFeeQty = feeQty
                         if feeOut.shortfallQty > Money.qtyEpsilon {
                             // 여기서 기록하지 않으면 검증기가 원인 불명의 V-QTY-01 로만 알려
                             // 사용자가 무엇을 해야 하는지 모른다.
@@ -495,6 +527,9 @@ struct CostBasisEngine {
                             receivedQty: rQty,
                             explicitFeeCostKRW: explicitFee
                         )
+                        // 자기 계정 간 이동은 **같은 풀 안의 이동**이라 원가가 움직이지 않는다.
+                        // 네트워크 수수료로 실제 사라진 수량만 뺀다 (백서 U-10 · Q2 = 폐기).
+                        pool.abandon(asset: e.baseAsset.code, year: yearOf(e), qty: max(0, wQty - rQty) + explicitFeeQty)
                         abandonedTotal += result.abandonedCostKRW
                         extraDeductible += result.deductibleExpenseKRW
                         let year = TaxTime.calendarYearKST(e.timestamp)
@@ -516,6 +551,7 @@ struct CostBasisEngine {
                         ))
                     } else {
                         // 원금 + 별도 출금 수수료의 원가가 함께 소멸한다
+                        pool.abandon(asset: e.baseAsset.code, year: yearOf(e), qty: wQty + explicitFeeQty)
                         abandonedTotal += out.costKRW + explicitFee
                         abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW + explicitFee
                         warnings.append("미매칭 출금 원가 소멸: \(e.baseAsset.code) \(Money.decimalString(wQty))")
@@ -537,6 +573,7 @@ struct CostBasisEngine {
                 case .income:
                     if !e.baseAsset.isKRW {
                         book(for: e.accountID, asset: e.baseAsset).acquire(qty: Money.abs(e.quantity), costKRW: 0)
+                        pool.acquire(asset: e.baseAsset.code, year: yearOf(e), qty: Money.abs(e.quantity), costKRW: 0)
                         issues.append(.init(
                             id: "V-COST-01", severity: "warning",
                             message: "에어드롭·리베이트 등은 취득가 0원으로 처리됩니다 (처분 시 전액이 이익)",
