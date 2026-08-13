@@ -12,7 +12,7 @@ struct PolicyBundle: Sendable {
 
     static var v1Default: PolicyBundle {
         PolicyBundle(
-            id: "cointax-v1.1",
+            id: "cointax-v1.2",   // v1.2: 원가법 고지에 개인지갑 포함 (TaxCopy.costMethods)
             transferCost: AbandonLostCostPolicy(),
             costMethodResolver: VASPMAElseFIFOResolver(),
             deemed: MaxBookMarketDeemedPolicy(),
