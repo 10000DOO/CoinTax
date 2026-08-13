@@ -8,6 +8,8 @@ struct PolicyBundle: Sendable {
     var taxRate: any TaxRatePolicy
     var rounding: any RoundingPolicy
     var fxAssumption: any FXAssumptionPolicy
+    /// `[법]` §37⑥ 필요경비 의제 50% — 기본은 꺼짐 (「할 수 있다」이므로 사용자 선택)
+    var proxyExpense: any ProxyExpensePolicy
     var disclaimers: [String]
 
     static var v1Default: PolicyBundle {
@@ -20,6 +22,7 @@ struct PolicyBundle: Sendable {
             taxRate: KROtherIncomeTaxRatePolicy(),
             rounding: StatutoryKRWRoundingPolicy(),
             fxAssumption: USDTEqualsUSDAssumption(),
+            proxyExpense: StatutoryProxyExpensePolicy(),
             disclaimers: TaxCopy.all
         )
     }
@@ -33,6 +36,14 @@ struct PolicyBundle: Sendable {
     /// 나중에 "이 숫자는 어느 정책으로 계산했나"를 답할 수 있다 (design/04-policies §1).
     static var current: PolicyBundle {
         var bundle = v1Default
+        // 필요경비 의제 50% 를 켠 자산이 있으면 **번들 id 를 바꾼다** — 같은 자료라도
+        // 다른 필요경비로 계산한 숫자이므로 과거 스냅샷과 구분되어야 한다
+        let proxyAssets = ProxyExpensePreferences.enabledAssets
+        if !proxyAssets.isEmpty {
+            let p = StatutoryProxyExpensePolicy(enabledAssets: proxyAssets)
+            bundle.proxyExpense = p
+            bundle.id = "\(v1Default.id)+\(p.id)"
+        }
         let mode = DeemedPreferences.basisMode
         bundle.deemed = MaxBookMarketDeemedPolicy(mode: mode)
         if mode != .positionAverage {

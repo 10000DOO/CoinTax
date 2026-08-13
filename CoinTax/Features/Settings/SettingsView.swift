@@ -28,6 +28,7 @@ struct SettingsView: View {
 
     // 의제 방식
     @State private var deemedMode = DeemedPreferences.basisMode
+    @State private var proxyAssets = ProxyExpensePreferences.enabledAssets
 
     @State private var message: String?
     @State private var busy = false
@@ -39,6 +40,7 @@ struct SettingsView: View {
             exchangeRateCard
             marketPriceCard
             deemedModeCard
+            proxyExpenseCard
             privacyCard
         }
         .onAppear { refresh() }
@@ -265,6 +267,43 @@ struct SettingsView: View {
         }
     }
 
+    // MARK: - 필요경비 의제 50%
+
+    private var proxyExpenseCard: some View {
+        Card(
+            title: "취득가를 증명할 수 없는 코인",
+            systemImage: "questionmark.folder",
+            footnote: "소득세법 제37조제6항 — 「할 수 있다」이므로 켤지 말지는 본인 선택입니다. 켜면 리포트에 켰을 때·껐을 때 세액을 나란히 보여줍니다."
+        ) {
+            Text("거래소를 거치지 않고 받아서 산 값을 증빙으로 확인할 수 없는 코인은, 그 종류 **전체**의 필요경비를 「그 해 판 금액의 50%」로 갈음할 수 있습니다. 이때 **수수료는 따로 빼지 못합니다.**")
+                .font(Theme.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Text("⚠️ 요건은 「2027년 이후 취득분」인데 효과는 「같은 종류 전체」라, 2026년 이전 보유분까지 걸리는지 조문이 답하지 않습니다. 2026년 10월 국세청 기준을 기다리는 항목입니다.")
+                .font(Theme.caption).foregroundStyle(Theme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+
+            let assets = (env.lastCalculation?.replay.holdings.aggregated.map(\.asset.code) ?? [])
+                + (env.lastCalculation?.summary.disposals.map(\.asset.code) ?? [])
+            let unique = Array(Set(assets)).sorted()
+            if unique.isEmpty {
+                Text("먼저 계산을 한 번 돌리면 자산 목록이 나옵니다.")
+                    .font(Theme.caption).foregroundStyle(.secondary)
+            } else {
+                ForEach(unique, id: \.self) { code in
+                    Toggle(code, isOn: Binding(
+                        get: { proxyAssets.contains(code) },
+                        set: { on in
+                            if on { proxyAssets.insert(code) } else { proxyAssets.remove(code) }
+                            ProxyExpensePreferences.enabledAssets = proxyAssets
+                            env.invalidateCalculation()
+                        }
+                    ))
+                    .font(Theme.caption)
+                }
+            }
+        }
+    }
+
     // MARK: - 의제 방식
 
     private var deemedModeCard: some View {
@@ -312,6 +351,7 @@ struct SettingsView: View {
         allowPublic = FXPreferences.allowPublicFallback
         savedKeyMask = FXKeychain.maskedECOSKey()
         deemedMode = DeemedPreferences.basisMode
+        proxyAssets = ProxyExpensePreferences.enabledAssets
         let progress = SetupProgress.evaluate(env: env)
         missingFXDays = progress.missingFXDays
         missingMarket = progress.missingMarketAssets

@@ -23,6 +23,12 @@ enum ReportCSVExporter {
             rows.append(["deemedAlt", alt.basisMode, krw(alt.totalDeemedCostKRW), krw(alt.netIncomeKRW), krw(alt.totalTaxKRW)])
         }
         meta("transferCostPolicy", "abandon_lost_cost")
+        if !summary.proxyExpenseAssets.isEmpty {
+            meta("proxyExpense50Assets", summary.proxyExpenseAssets.joined(separator: "|"))
+            if let alt = summary.proxyExpenseAlternative {
+                rows.append(["proxyAlt", alt.basisMode, krw(alt.totalDeemedCostKRW), krw(alt.netIncomeKRW), krw(alt.totalTaxKRW)])
+            }
+        }
         meta("taxYear", "\(summary.taxYear)")
         // 과세 시작 전 연도는 신고 대상이 아니다 — 파일만 보고 신고자료로 오해하면 안 된다
         if summary.taxYear < TaxTime.taxStartYear {

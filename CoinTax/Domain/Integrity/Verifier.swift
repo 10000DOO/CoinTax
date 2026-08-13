@@ -311,8 +311,24 @@ enum Verifier {
         //
         // 이제 요약이 아니라 **엔진 결과(`r.disposals`)에서 그 해 것만 골라** 다시 더한다.
         // 집계기의 연도 필터가 틀리거나 다른 해 처분이 섞이면 여기서 잡힌다.
+        //
+        // `[법]` §37⑥ 필요경비 의제 50% 를 켠 자산은 **총양도가액 × 비율**이 필요경비다.
+        // 집계기는 이걸 건별로 나눠 담고, 여기서는 **총액으로** 다시 센다 — 두 경로가 달라야
+        // 검사가 성립한다. 같은 식을 쓰면 또 「실패할 수 없는 검사」가 된다.
         let yearDisposals = r.disposals.filter { $0.taxYear == s.taxYear }
-        let costFromEngine = yearDisposals.reduce(Decimal(0)) { $0 + $1.costKRW + $1.feesKRW } + s.extraDeductibleKRW
+        let proxy = p.proxyExpense
+        var costFromEngine = s.extraDeductibleKRW
+        let byAsset = Dictionary(grouping: yearDisposals, by: { $0.asset.code })
+        for code in byAsset.keys.sorted() {
+            let rows = byAsset[code]!
+            if proxy.isEnabled(AssetSymbol(code)) {
+                costFromEngine += proxy.necessaryExpense(
+                    totalProceedsKRW: rows.reduce(Decimal(0)) { $0 + $1.proceedsKRW }
+                )
+            } else {
+                costFromEngine += rows.reduce(Decimal(0)) { $0 + $1.costKRW + $1.feesKRW }
+            }
+        }
         if Money.abs(costFromEngine - s.totalCostsKRW) > 1 {
             issues.append(.init(
                 id: "V-COST-03", severity: "critical",

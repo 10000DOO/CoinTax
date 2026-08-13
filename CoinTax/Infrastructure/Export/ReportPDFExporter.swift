@@ -152,6 +152,14 @@ enum ReportPDFExporter {
             }
         }
         lines.append("")
+        if !s.proxyExpenseAssets.isEmpty {
+            lines.append("")
+            lines.append("필요경비 의제 50% 적용 (소득세법 제37조제6항) — \(s.proxyExpenseAssets.joined(separator: ", "))")
+            lines.append("  이 자산은 판 금액의 50%를 필요경비로 하고 수수료를 따로 빼지 않습니다.")
+            if let alt = s.proxyExpenseAlternative {
+                lines.append("  적용 시 세액: \(Money.decimalString(Money.roundKRW(s.totalTaxKRW)))원 / \(alt.basisLabel): \(Money.decimalString(Money.roundKRW(alt.totalTaxKRW)))원")
+            }
+        }
         // 화면과 파일이 다른 말을 하면 안 된다 — 신고 안내를 같은 순서로 싣는다
         if s.taxYear >= TaxTime.taxStartYear {
             lines.append("")

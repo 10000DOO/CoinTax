@@ -91,6 +91,28 @@ final class CalculationPipeline {
         summary.deemedBasisMode = policies.deemed.mode.rawValue
         summary2.deemedBasisMode = policies.deemed.mode.rawValue
 
+        // `[법]` §37⑥ 은 「할 수 있다」이므로 **유리한 쪽을 고르는 길**이다.
+        // 켰으면 끈 경우도 한 번 더 계산해 두 값을 나란히 보여준다 (집계만 다시 돌리면 된다 —
+        // 재생 결과는 같고 필요경비 계산만 갈린다).
+        summary.proxyExpenseAssets = policies.proxyExpense.enabledAssets.sorted()
+        if !policies.proxyExpense.enabledAssets.isEmpty {
+            var offPolicies = policies
+            offPolicies.proxyExpense = StatutoryProxyExpensePolicy()
+            let off = TaxAggregator.aggregate(
+                projectID: ProjectID(project.id), disposals: replay.disposals, taxYear: taxYear,
+                extraDeductible: replay.extraDeductibleByYear[taxYear] ?? 0,
+                abandonedTransferCostKRW: replay.abandonedByYear[taxYear] ?? 0,
+                deemed: replay.deemedPositions, policies: offPolicies
+            )
+            summary.proxyExpenseAlternative = DeemedAlternative(
+                basisMode: "proxy_off",
+                basisLabel: "의제 50%를 쓰지 않으면",
+                totalDeemedCostKRW: off.totalCostsKRW,
+                netIncomeKRW: off.netIncomeKRW,
+                totalTaxKRW: off.totalTaxKRW
+            )
+        }
+
         // 「다른 방식으로 계산하면」 비교는 없어졌다.
         //
         // `[영]` 소득세법 시행령 §88① 이 거주자별 총평균법이 되면서 **매입 건(lot) 개념이

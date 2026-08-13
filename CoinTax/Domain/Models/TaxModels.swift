@@ -90,6 +90,10 @@ struct TaxYearSummary: Codable, Sendable {
     var deemedBasisMode: String = DeemedBasisMode.positionAverage.rawValue
     /// 다른 방식으로 계산했을 때의 결과 (TQ-01 미결이므로 항상 함께 보여준다)
     var deemedAlternative: DeemedAlternative? = nil
+    /// `[법]` §37⑥ 필요경비 의제 50% 를 켠 자산 (없으면 빈 배열)
+    var proxyExpenseAssets: [String] = []
+    /// 그 의제를 **끄고** 계산했을 때의 값 — 「할 수 있다」라 유리한 쪽을 고르려면 둘 다 필요하다
+    var proxyExpenseAlternative: DeemedAlternative? = nil
 
     /// 채택 방식의 의제 취득가 총액
     var totalDeemedCostKRW: Decimal {

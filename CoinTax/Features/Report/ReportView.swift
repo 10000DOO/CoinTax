@@ -60,6 +60,7 @@ struct ReportView: View {
             // 연도만 바꾸고 다시 계산하지 않으면 다른 해 세액이 이 해 제목 아래 그대로 남는다.
             if let c = env.lastCalculation, c.covers(taxYear: taxYear) {
                 taxFlowCard(c)
+                if !c.summary.proxyExpenseAssets.isEmpty { proxyExpenseCard(c) }
                 if !isPreviewYear { filingCard(c) }
                 verificationCard(c)
                 if !c.summary.disposals.isEmpty { assetBreakdownCard(c) }
@@ -365,6 +366,31 @@ struct ReportView: View {
             }
             if c.summary.fxSources.count > 12 {
                 Text("외 \(c.summary.fxSources.count - 12)일").font(Theme.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: 필요경비 의제 50%
+
+    private func proxyExpenseCard(_ c: CalculationResult) -> some View {
+        Card(
+            title: "취득가 증명 불가 — 판 금액의 50%를 필요경비로",
+            systemImage: "questionmark.folder",
+            footnote: "소득세법 제37조제6항 · 시행령 제88조제4항·제5항. 「할 수 있다」이므로 유리한 쪽을 고르면 됩니다."
+        ) {
+            Text("적용한 자산: \(c.summary.proxyExpenseAssets.joined(separator: ", "))")
+                .font(Theme.caption).foregroundStyle(.secondary)
+            Text("이 자산들은 수수료를 따로 빼지 않습니다 (조문 후단).")
+                .font(Theme.caption).foregroundStyle(.secondary)
+            if let alt = c.summary.proxyExpenseAlternative {
+                Divider().padding(.vertical, 2)
+                Row(label: "적용했을 때 세액", value: Fmt.krwString(c.summary.totalTaxKRW), emphasized: true)
+                Row(label: alt.basisLabel, value: Fmt.krwString(alt.totalTaxKRW))
+                let diff = alt.totalTaxKRW - c.summary.totalTaxKRW
+                Text(diff > 0
+                     ? "적용하는 쪽이 \(Fmt.krwString(diff)) 적게 나옵니다."
+                     : (diff < 0 ? "적용하지 않는 쪽이 \(Fmt.krwString(-diff)) 적게 나옵니다." : "두 방식의 세액이 같습니다."))
+                    .font(Theme.caption).foregroundStyle(Theme.warning)
             }
         }
     }
