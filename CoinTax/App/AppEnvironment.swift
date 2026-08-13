@@ -34,6 +34,17 @@ final class AppEnvironment: ObservableObject {
         calculationStale = true
     }
 
+    /// 계산에 **들어가는 값**(의제 시가 등)을 지운다.
+    ///
+    /// 지우기와 「다시 계산해야 함」 표시를 **한 곳에 묶는다.** 화면마다 따로 적으면
+    /// 한 곳이 빠지고, 그러면 낡은 계산이 「검증 완료」로 남아 **신고자료 내보내기가 열린 채**가 된다
+    /// (`ReportView.canExport` 가 이 표시로 잠근다). 실제로 시가 삭제 버튼에서 그렇게 빠져 있었다.
+    func deleteCalculationInput(_ object: some PersistentModel) throws {
+        modelContext.delete(object)
+        try modelContext.save()
+        invalidateCalculation()
+    }
+
     init(container: ModelContainer) {
         self.modelContainer = container
         self.modelContext = container.mainContext

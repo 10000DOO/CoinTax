@@ -56,7 +56,9 @@ struct ReportView: View {
                 )
             }
 
-            if let c = env.lastCalculation {
+            // **고른 연도의 계산일 때만** 숫자를 보여준다.
+            // 연도만 바꾸고 다시 계산하지 않으면 다른 해 세액이 이 해 제목 아래 그대로 남는다.
+            if let c = env.lastCalculation, c.covers(taxYear: taxYear) {
                 taxFlowCard(c)
                 verificationCard(c)
                 if !c.summary.disposals.isEmpty { assetBreakdownCard(c) }
@@ -68,8 +70,8 @@ struct ReportView: View {
             } else {
                 EmptyState(
                     systemImage: "doc.text.magnifyingglass",
-                    title: "아직 계산하지 않았습니다",
-                    message: "위의 «계산» 을 누르면 그해 양도분으로 예상 세액을 만듭니다.",
+                    title: "\(taxYear)년은 아직 계산하지 않았습니다",
+                    message: "위의 «계산» 을 누르면 \(taxYear)년 양도분으로 예상 세액을 만듭니다.",
                     actionTitle: "계산하기"
                 ) { calculate() }
             }
@@ -402,10 +404,13 @@ struct ReportView: View {
 
     // MARK: 동작
 
-    /// 낡은 결과로는 내보내지 않는다
+    /// 낡은 결과로는 내보내지 않는다.
+    /// **고른 연도와 다른 해의 계산**도 마찬가지다 — 파일에는 계산한 해가 적히므로
+    /// 화면에서 고른 해의 자료라고 믿고 신고하면 엉뚱한 해를 신고하게 된다.
     private var canExport: Bool {
         guard !env.calculationStale else { return false }
-        return env.lastCalculation?.verification.isExportAllowed ?? false
+        guard let c = env.lastCalculation, c.covers(taxYear: taxYear) else { return false }
+        return c.verification.isExportAllowed
     }
 
     private func calculate() {

@@ -5,6 +5,13 @@ struct CalculationResult: Sendable {
     var summary: TaxYearSummary
     var replay: ReplayResult
     var verification: VerificationReport
+
+    /// 이 계산이 **그 과세연도**의 결과인가.
+    ///
+    /// 리포트 화면은 연도를 고르는 칸과 계산 결과를 따로 들고 있다. 연도만 바꾸고 다시 계산하지
+    /// 않으면 **다른 해 숫자가 그 해 제목 아래** 그대로 남는다 — 세액을 그 해 것으로 읽게 된다.
+    /// 그래서 보여주기 전과 내보내기 전에 반드시 이걸 확인한다.
+    func covers(taxYear: Int) -> Bool { summary.taxYear == taxYear }
 }
 
 @MainActor
