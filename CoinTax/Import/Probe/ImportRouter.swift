@@ -37,6 +37,11 @@ enum ImportRouter {
             return .binance
         case "okx-trading-history-csv-v1", "okx-funding-history-csv-v1":
             return .okx
+        // 하드웨어 지갑 — 거래소가 아니라 개인지갑 계정으로 간다.
+        // 지갑은 신고수리 사업자가 아니지만, 취득가액 계산은 거래소든 지갑이든
+        // 거주자별 총평균법 하나다 (`[영]` 소득세법 시행령 §88①).
+        case "trezor-suite-csv-v1":
+            return .wallet
         default:
             return nil
         }

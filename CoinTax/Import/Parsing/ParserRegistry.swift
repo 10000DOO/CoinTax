@@ -12,6 +12,7 @@ struct ParserRegistry: Sendable {
             BinanceWithdrawXLSXParser(),
             BinanceSpotXLSXParser(),
             BithumbCertificatePDFParser(),
+            TrezorSuiteCSVParser(),
             GenericTabularMapper() // 폴백 — detect 점수 낮음
         ])
     }
