@@ -38,6 +38,10 @@ final class ResidentCostPool {
     private var flows: [String: [Int: YearFlow]] = [:]
     /// 의제취득가 재기동처럼 **기초를 직접 지정**한 경우 (assetCode → year → 기초)
     private var forcedOpenings: [String: [Int: Position]] = [:]
+    /// 코인으로 낸 수수료처럼 **다른 자산의 단가에서 나오는** 취득원가 (assetCode → year → 금액).
+    /// BNB 로 BTC 수수료를 내고 BTC 로 BNB 수수료를 내면 두 단가가 서로를 참조한다 —
+    /// `settle` 을 몇 번 돌려 수렴시키기 위해 흐름과 분리해 둔다.
+    private var derivedAcquisitionCosts: [String: [Int: Decimal]] = [:]
     private(set) var unitCosts: [String: [Int: Decimal]] = [:]
     private(set) var closings: [String: [Int: Position]] = [:]
     /// 정산 중 발견한 문제 (수량이 모자라 기말이 음수가 되는 경우 등)
@@ -66,6 +70,11 @@ final class ResidentCostPool {
         forcedOpenings[asset, default: [:]][year] = Position(qty: qty, cost: costKRW)
     }
 
+    /// 다른 자산의 단가에서 나오는 취득원가를 **덮어쓴다** (누적이 아니다 — 수렴 반복 중 갱신되므로).
+    func setDerivedAcquisitionCost(asset: String, year: Int, costKRW: Decimal) {
+        derivedAcquisitionCosts[asset, default: [:]][year] = costKRW
+    }
+
     // MARK: - 정산
 
     /// 이 풀이 다루는 자산 코드 (결정적 순서)
@@ -80,12 +89,17 @@ final class ResidentCostPool {
         return lo...hi
     }
 
+
     /// `years` 를 **오름차순으로** 정산한다. 앞 해의 기말이 다음 해 기초가 되므로
     /// 중간 연도를 건너뛰면 안 된다 (거래가 없는 해도 포함해서 넘긴다).
     ///
     /// 엔진은 이걸 두 번 부른다 — 의제취득가 재기동 전(2026 까지)과 그 후(2027 부터).
     /// §37⑤ 의 max 비교에 「2026 말 총평균단가」가 필요하기 때문이다.
+    /// 같은 연도를 다시 정산해도 안전하다 — 그 해 값을 덮어쓰고, 기초는 매번 직전 해 기말에서
+    /// 다시 읽는다. 수수료 원가 수렴 때문에 여러 번 부른다.
     func settle(years: [Int]) {
+        let target = Set(years)
+        settleWarnings.removeAll { target.contains($0.year) }
         for asset in assetCodes {
             for year in years.sorted() {
                 let opening = openingPosition(asset: asset, year: year)
@@ -93,6 +107,7 @@ final class ResidentCostPool {
 
                 let totalQty = opening.qty + flow.acquiredQty
                 let totalCost = opening.cost + flow.acquiredCost
+                    + (derivedAcquisitionCosts[asset]?[year] ?? 0)
                 // §92②4 — 「기초 + 당기취득」의 총액을 총수량으로 나눈 평균단가
                 let unit: Decimal = Money.isApproxZero(totalQty) ? 0 : totalCost / totalQty
                 unitCosts[asset, default: [:]][year] = unit

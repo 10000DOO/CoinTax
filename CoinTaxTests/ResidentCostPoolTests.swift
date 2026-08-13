@@ -160,4 +160,46 @@ final class ResidentCostPoolTests: XCTestCase {
         XCTAssertEqual(pool.unitCost(asset: "BTC", year: 2027), 100_000_000)
         XCTAssertEqual(pool.unitCost(asset: "ETH", year: 2027), 5_000_000)
     }
+
+    /// 코인으로 낸 수수료가 취득원가에 더해지면 **단가가 서로를 참조할 수 있다**.
+    /// (BNB 로 BTC 수수료를 내고, BTC 로 BNB 수수료를 내는 경우)
+    /// 정산을 반복해 수렴시킨다 — 그 반복이 안정적인지 고정한다.
+    func testDerivedFeeCostConverges() {
+        let pool = ResidentCostPool()
+        pool.acquire(asset: "BTC", year: 2027, qty: 10, costKRW: 1_000_000_000)
+        pool.acquire(asset: "BNB", year: 2027, qty: 100, costKRW: 100_000_000)
+        // BTC 매수 수수료로 BNB 0.1개, BNB 매수 수수료로 BTC 0.001개를 냈다고 하자
+        pool.dispose(asset: "BNB", year: 2027, qty: Decimal(string: "0.1")!)
+        pool.dispose(asset: "BTC", year: 2027, qty: Decimal(string: "0.001")!)
+
+        var last: (btc: Decimal, bnb: Decimal) = (0, 0)
+        for _ in 0..<4 {
+            let uBTC = pool.unitCost(asset: "BTC", year: 2027) ?? 0
+            let uBNB = pool.unitCost(asset: "BNB", year: 2027) ?? 0
+            pool.setDerivedAcquisitionCost(asset: "BTC", year: 2027, costKRW: Decimal(string: "0.1")! * uBNB)
+            pool.setDerivedAcquisitionCost(asset: "BNB", year: 2027, costKRW: Decimal(string: "0.001")! * uBTC)
+            pool.settle(years: [2027])
+            last = (pool.unitCost(asset: "BTC", year: 2027)!, pool.unitCost(asset: "BNB", year: 2027)!)
+        }
+        // 한 번 더 돌려도 1원 이상 움직이지 않아야 한다
+        let uBTC = last.btc, uBNB = last.bnb
+        pool.setDerivedAcquisitionCost(asset: "BTC", year: 2027, costKRW: Decimal(string: "0.1")! * uBNB)
+        pool.setDerivedAcquisitionCost(asset: "BNB", year: 2027, costKRW: Decimal(string: "0.001")! * uBTC)
+        pool.settle(years: [2027])
+        XCTAssertLessThan(Money.abs(pool.unitCost(asset: "BTC", year: 2027)! - last.btc), 1)
+        XCTAssertLessThan(Money.abs(pool.unitCost(asset: "BNB", year: 2027)! - last.bnb), 1)
+    }
+
+    /// 같은 연도를 다시 정산해도 값이 흔들리지 않는다 (수렴 반복의 전제)
+    func testResettleIsStable() {
+        let pool = ResidentCostPool()
+        pool.acquire(asset: "BTC", year: 2027, qty: 3, costKRW: 300_000_000)
+        pool.dispose(asset: "BTC", year: 2027, qty: 1)
+        pool.acquire(asset: "BTC", year: 2028, qty: 1, costKRW: 200_000_000)
+        pool.settle(years: [2027, 2028])
+        let first = (pool.unitCost(asset: "BTC", year: 2028)!, pool.closing(asset: "BTC", year: 2028)!)
+        pool.settle(years: [2027, 2028])
+        XCTAssertEqual(pool.unitCost(asset: "BTC", year: 2028)!, first.0)
+        XCTAssertEqual(pool.closing(asset: "BTC", year: 2028)!, first.1)
+    }
 }
