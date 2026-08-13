@@ -141,9 +141,20 @@ struct ReplayResult: Sendable {
     var fxUsageNotes: [String] = []
     /// 의제취득가로 재기동된 (계정, 자산) 키 — 감사 추적용
     var deemedAppliedKeys: Set<String> = []
-    /// 재고가 부족했던 (계정|자산) 키. 그 자산만 수량 대조를 면제한다
-    /// (전체를 면제하면 다른 자산의 진짜 불일치를 놓친다)
-    var shortfallKeys: Set<String> = []
+    /// 재고가 부족해 **처분하지 못한 수량**을 (계정|자산)별로 모은 것.
+    ///
+    /// 수량 대조(V-QTY-01)는 이 값만큼만 차이를 봐준다.
+    /// 예전에는 「부족이 났던 자산」을 통째로 면제했다 — 거래소 반올림 수준의
+    /// 1e-8 짜리 먼지(앱이 「정상」으로 보는 값) 하나만 나도 그 자산의 마지막 그물이 꺼졌다.
+    /// 바이낸스는 거래소 잔고 열이 없어 V-BAL 도 없으므로 그러면 아무도 못 잡는다.
+    var shortfallQtyByKey: [String: Decimal] = [:]
+
+    /// 과세 시작(2027-01-01 0시)**까지의** 부족량. 의제 스냅샷 수량 대조(V-DEM-01)가 쓴다 —
+    /// 전체 기간 부족량을 쓰면 2027 이후에 난 부족까지 봐주게 되어 스냅샷의 진짜 차이를 놓친다.
+    var preTaxShortfallQtyByKey: [String: Decimal] = [:]
+
+    /// 재고가 부족했던 (계정|자산) 키
+    var shortfallKeys: Set<String> { Set(shortfallQtyByKey.keys) }
 }
 
 struct TransferCostDetail: Sendable {

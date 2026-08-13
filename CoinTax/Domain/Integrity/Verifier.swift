@@ -58,10 +58,44 @@ enum Verifier {
             }
         }
 
-        // ── V-TAX-01 손익 합계 == 소득금액 ─────────────────────────────
-        let pnlSum = s.disposals.reduce(Decimal(0)) { $0 + $1.pnlKRW } - s.extraDeductibleKRW
-        if Money.abs(pnlSum - s.netIncomeKRW) > 1 {
-            issues.append(.init(id: "V-TAX-01", severity: "critical", message: "손익 합계와 소득 불일치", context: "pnl=\(pnlSum) income=\(s.netIncomeKRW)"))
+        // ── V-TAX-07 숫자가 **값이긴 한가** ─────────────────────────────
+        //
+        // `Decimal` 은 자릿수를 넘기면 오류 없이 조용히 `NaN` 이 된다. 그리고 `NaN` 은
+        // **어떤 비교에서도 `false`** 라, 아래의 모든 검사를 그냥 통과한다.
+        // 하필 마지막 단계가 `max(0, 소득 − 공제)` 이고 `max(0, NaN)` 은 **0** 이라
+        // 결과가 **세액 0원**으로 접힌다 — 가장 나쁜 방향으로 조용히 틀린다.
+        // 그래서 다른 무엇보다 먼저 「이게 값이긴 한가」를 본다.
+        let headline: [(String, Decimal)] = [
+            ("총수입금액", s.totalProceedsKRW), ("필요경비", s.totalCostsKRW),
+            ("소득금액", s.netIncomeKRW), ("과세표준", s.taxBaseKRW),
+            ("국세", s.nationalTaxKRW), ("지방소득세", s.localTaxKRW), ("합계", s.totalTaxKRW),
+            ("전송 소실 원가", s.abandonedTransferCostKRW)
+        ]
+        let broken = headline.filter { $0.1.isNaN }.map(\.0)
+        if !broken.isEmpty {
+            issues.append(.init(
+                id: "V-TAX-07", severity: "critical",
+                message: "계산 결과에 숫자가 아닌 값이 있습니다 (자릿수를 넘겼을 수 있습니다) — 이 상태로는 세액을 신뢰할 수 없습니다",
+                context: broken.joined(separator: ", ")
+            ))
+        }
+
+        // ── V-TAX-01 리포트에 찍히는 세 숫자가 서로 맞는가 ──────────────
+        //
+        // 예전에는 `Σ pnl − 추가공제` 를 `netIncomeKRW` 와 비교했다. 그런데 집계기가
+        // `netIncomeKRW` 를 **글자 그대로 같은 식**으로 만든다 — 즉 **실패할 수 없는 검사**였다
+        // (3차 감사 G-1 과 같은 모양. 건별 pnl 의 정합성은 V-COST-06·V-RE-02 가 이미 본다).
+        //
+        // 대신 **사용자가 신고서에 옮겨 적는 세 숫자**를 묶는다:
+        //   총수입금액 − 필요경비 == 소득금액
+        // 이 셋은 화면·CSV·PDF 에 나란히 찍힌다. 집계기가 어느 하나를 다르게 만들면
+        // 사용자가 보는 표가 산수에 안 맞게 되는데, 지금은 그걸 보는 곳이 없다.
+        if Money.abs((s.totalProceedsKRW - s.totalCostsKRW) - s.netIncomeKRW) > 1 {
+            issues.append(.init(
+                id: "V-TAX-01", severity: "critical",
+                message: "리포트의 «총수입금액 − 필요경비» 가 소득금액과 다릅니다",
+                context: "총수입 \(Money.decimalString(s.totalProceedsKRW)) − 필요경비 \(Money.decimalString(s.totalCostsKRW)) ≠ 소득 \(Money.decimalString(s.netIncomeKRW))"
+            ))
         }
 
         // ── V-TAX-02/03/04 세액 ────────────────────────────────────────
@@ -139,12 +173,20 @@ enum Verifier {
         }
         for (key, expected) in expectedQty {
             let actual = actualQty[key] ?? 0
-            // 재고 부족으로 처분하지 못한 수량이 있으면 차이가 남는다 — 그건 이미 V-QTY-02로 보고됨.
-            // **해당 자산만** 면제한다. 전체를 면제하면 다른 자산의 진짜 불일치를 놓친다.
-            if Money.abs(expected - actual) > Money.qtyEpsilon, !r.shortfallKeys.contains(key) {
+            // 재고 부족으로 처분하지 못한 수량이 있으면 그만큼 차이가 남는다 — 그건 이미 V-QTY-02로 보고됐다.
+            //
+            // **부족했던 수량만큼만** 빼고 본다. 예전에는 「부족이 났던 자산」을 통째로 면제해서,
+            // 거래소 반올림 수준의 1e-8 짜리 먼지 하나만 나도 그 자산의 마지막 그물이 꺼졌다.
+            // (바이낸스는 거래소 잔고 열이 없어 V-BAL 도 없다 — 그러면 아무도 못 잡는다.)
+            let reportedShortfall = r.shortfallQtyByKey[key] ?? 0
+            let gap = Money.abs((actual - expected) - reportedShortfall)
+            if gap > Money.qtyEpsilon {
+                let tail = reportedShortfall > 0
+                    ? " · 재고 부족으로 처분 못한 \(Money.decimalString(reportedShortfall))을 뺀 뒤에도 남는 차이"
+                    : ""
                 issues.append(.init(
                     id: "V-QTY-01", severity: "critical",
-                    message: "이벤트 수량 합과 보유 수량이 다릅니다 (기대 \(Money.decimalString(expected)) / 실제 \(Money.decimalString(actual)))",
+                    message: "이벤트 수량 합과 보유 수량이 다릅니다 (기대 \(Money.decimalString(expected)) / 실제 \(Money.decimalString(actual)))\(tail)",
                     context: key.split(separator: "|").last.map(String.init)
                 ))
             }
@@ -170,11 +212,21 @@ enum Verifier {
                 ))
             }
         }
-        if !BalanceReconciler.hasAnyPrintedBalance(input.events) {
+        // 어디까지 덮였는지 **원본 종류별로** 알린다.
+        //
+        // 예전에는 「하나라도 잔고 열이 있으면」 조용했다. 그래서 빗썸(잔고 있음)과
+        // 바이낸스(잔고 없음)를 함께 넣으면 경고가 접혀, 사용자는 **바이낸스가 외부 대조를
+        // 한 번도 못 받았다는 사실을 알 수 없었다.** 잔고 대조는 이 앱에서 유일하게
+        // 앱 밖에서 온 정답지라, 그 범위를 잘못 알면 안심의 근거가 틀어진다.
+        let uncovered = BalanceReconciler.sourcesWithoutPrintedBalance(input.events)
+        if !uncovered.isEmpty {
+            let all = !BalanceReconciler.hasAnyPrintedBalance(input.events)
             issues.append(.init(
                 id: "V-BAL-03", severity: "warning",
-                message: "가져온 원본에 거래소 잔고 열이 없어 외부 대조를 하지 못했습니다 — 내부 정합성만 확인했습니다",
-                context: nil
+                message: all
+                    ? "가져온 원본에 거래소 잔고 열이 없어 외부 대조를 하지 못했습니다 — 내부 정합성만 확인했습니다"
+                    : "일부 원본은 거래소 잔고 열이 없어 외부 대조를 받지 못했습니다 — 그 부분은 내부 정합성만 확인했습니다",
+                context: uncovered.joined(separator: ", ")
             ))
         }
 
@@ -229,8 +281,22 @@ enum Verifier {
         if s.extraDeductibleKRW != 0 && p.transferCost.id == "abandon_lost_cost" {
             issues.append(.init(id: "V-COST-03", severity: "critical", message: "소실 원가가 필요경비에 포함됨", context: nil))
         }
-        if Money.abs(s.abandonedTransferCostKRW - (r.abandonedByYear[s.taxYear] ?? 0)) > 1 {
-            issues.append(.init(id: "V-COST-03", severity: "warning", message: "소실 원가 합계 불일치", context: nil))
+        // 소실 원가의 **연도 분배**가 깨지지 않았는가.
+        //
+        // 예전에는 `summary.abandonedTransferCostKRW` 를 `r.abandonedByYear[그 해]` 와 비교했다.
+        // 그런데 파이프라인이 바로 그 값을 넣어 준다 — **실패할 수 없는 검사**였다
+        // (3차 감사 G-1 · 5차 감사 회차 20 과 같은 모양).
+        //
+        // 대신 엔진 안에서 확인할 수 있는 것을 본다: 전 기간 합계와 연도별 합계가 같아야 한다.
+        // 연도 귀속이 틀어지면(예: 출금 시각이 아닌 다른 시각으로 연도를 잡으면)
+        // **다른 해 비용이 이 해 소득을 깎는다** — `ReplayResult` 주석이 경고하는 바로 그 사고다.
+        let abandonedByYearSum = r.abandonedByYear.values.reduce(Decimal(0), +)
+        if Money.abs(r.abandonedTotal - abandonedByYearSum) > 1 {
+            issues.append(.init(
+                id: "V-COST-03", severity: "critical",
+                message: "전송 소실 원가의 연도별 합이 전체 합과 다릅니다 (연도 귀속이 깨졌습니다)",
+                context: "전체 \(Money.decimalString(r.abandonedTotal)) / 연도별 합 \(Money.decimalString(abandonedByYearSum))"
+            ))
         }
         for d in r.transferCostDetails where d.deductibleExpenseKRW != 0 && p.transferCost.id == "abandon_lost_cost" {
             issues.append(.init(id: "V-COST-03", severity: "critical", message: "전송 소실 필요경비 금지 위반", context: nil))
@@ -271,8 +337,12 @@ enum Verifier {
         }
         for d in r.deemedPositions {
             let key = "\(d.accountID.raw.uuidString)|\(d.asset.code)"
-            if let expected = preTaxQty[key], Money.abs(expected - d.quantity) > Money.qtyEpsilon,
-               !r.shortfallKeys.contains(key) {
+            // 재고 부족은 **과세 시작 전까지 난 만큼만** 봐준다.
+            // 「부족이 났던 자산」을 통째로 면제하면 1e-8 짜리 먼지 하나로 이 검사가 꺼진다
+            // — 의제 스냅샷 수량은 의제취득가의 곱하는 쪽이라 틀리면 취득가 총액이 통째로 틀어진다.
+            let preTaxShortfall = r.preTaxShortfallQtyByKey[key] ?? 0
+            if let expected = preTaxQty[key],
+               Money.abs((d.quantity - expected) - preTaxShortfall) > Money.qtyEpsilon {
                 issues.append(.init(
                     id: "V-DEM-01", severity: "critical",
                     message: "의제 스냅샷 수량이 2027-01-01 0시까지 재생 결과와 다릅니다 (기대 \(Money.decimalString(expected)))",
@@ -301,6 +371,30 @@ enum Verifier {
                 }
             }
         }
+        // ── V-DEM-06 「다른 방식으로 계산하면」 숫자의 방향 ──────────────
+        //
+        // TQ-01(의제 비교 단위)은 확정 해석이 없어 **사용자가 두 방식 중 하나를 고른다.**
+        // 그 판단 근거가 리포트에 나란히 찍히는 「다른 방식 적용 시」 숫자인데,
+        // 그 값은 두 번째 엔진 실행에서 나오고 **지금까지 아무도 검산하지 않았다.**
+        //
+        // 수학적으로 늘 성립하는 관계가 하나 있다:
+        //   매입 건별로 max(단가, 시가)를 취해 더한 값 ≥ 평균에 max 를 한 번 취한 값
+        // (건별 ≥ 평균. 무작위 80시나리오에서도 80/80 성립.)
+        // 이게 뒤집혔다면 두 실행 중 하나가 다른 자료·다른 정책으로 돌았다는 뜻이다.
+        if let alt = s.deemedAlternative, !s.deemed.isEmpty {
+            let tolerance = Decimal(max(1, s.deemed.count))
+            let perLotIsAlt = alt.basisMode == DeemedBasisMode.perLot.rawValue
+            let bigger = perLotIsAlt ? alt.totalDeemedCostKRW : s.totalDeemedCostKRW
+            let smaller = perLotIsAlt ? s.totalDeemedCostKRW : alt.totalDeemedCostKRW
+            if bigger < smaller - tolerance {
+                issues.append(.init(
+                    id: "V-DEM-06", severity: "critical",
+                    message: "「다른 방식으로 계산하면」 의제취득가가 방향이 뒤집혀 있습니다 (매입 건별은 보유 평균보다 작을 수 없습니다)",
+                    context: "채택(\(s.deemedBasisMode)) \(Money.decimalString(s.totalDeemedCostKRW)) / 비교(\(alt.basisMode)) \(Money.decimalString(alt.totalDeemedCostKRW))"
+                ))
+            }
+        }
+
         // ── V-DEM-04 시가 누락 ─────────────────────────────────────────
         if !r.missingMarketAssets.isEmpty {
             // 아직 2027-01-01 이 오지 않았으면 그 시가는 존재할 수 없다 — 막으면 안 된다.
@@ -383,6 +477,39 @@ enum Verifier {
                 message: "바이낸스 입출금이 두 종류의 파일에서 들어왔습니다 — Transaction History 와 입금/출금 내역은 같은 내용이라 둘 다 넣으면 입출금이 두 번 잡힙니다. 한쪽 파일을 지우고 다시 계산하세요",
                 context: (["binance-transaction-history-csv-v1"] + overlappingBinanceSources.sorted()).joined(separator: " + ")
             ))
+        }
+
+        // ── V-IMP-06 한 원본만 **일찍 끝나는가** (기간을 짧게 받아온 자료) ──
+        //
+        // 명세서의 **마지막 거래**가 빠지면 어떤 검사도 못 잡는다 — 그 뒤에 비교할 잔고도,
+        // 그 재고를 쓰는 나중 거래도 없기 때문이다 (5차 감사 회차 14·15 에서 실데이터로 측정:
+        // 앞·중간을 빼면 잡히지만 꼬리를 빼면 세 거래소 모두 0건).
+        //
+        // 거래소 화면의 기본 조회기간이 3개월·1년인 경우가 많아 **기간을 짧게 받아오는 실수**가 흔하다.
+        // 그러면 그 뒤 거래가 통째로 빠진 채 세액이 나오고, 과세 시작 전 보유 수량이 틀리면
+        // **의제취득가가 통째로 틀어진다.**
+        //
+        // 앱이 알 수 있는 유일한 신호: 다른 원본은 최근까지 있는데 **한 원본만 한참 전에 끝난다.**
+        var lastBySource: [String: Date] = [:]
+        for e in input.events where e.type != .ignored {
+            if let prev = lastBySource[e.sourceKind], prev >= e.timestamp { continue }
+            lastBySource[e.sourceKind] = e.timestamp
+        }
+        if let newest = lastBySource.values.max(), lastBySource.count > 1 {
+            // 90일은 「거래를 잠시 쉰 것」과 「기간을 짧게 받아온 것」을 가르는 선이다.
+            // 짧게 잡으면 정상 자료에 경고가 쏟아지고, 길게 잡으면 놓친다.
+            let cutoff = newest.addingTimeInterval(-90 * 24 * 3600)
+            let stale = lastBySource
+                .filter { $0.value < cutoff }
+                .map { "\($0.key) (\(TaxTime.dayKST($0.value))까지)" }
+                .sorted()
+            if !stale.isEmpty {
+                issues.append(.init(
+                    id: "V-IMP-06", severity: "warning",
+                    message: "일부 원본이 다른 원본보다 한참 일찍 끝납니다 — 조회기간을 짧게 받아왔다면 그 뒤 거래가 통째로 빠집니다 (명세서 마지막 뒤는 어떤 검사로도 확인할 수 없습니다). 그 거래소를 안 쓴 것이면 넘어가세요",
+                    context: stale.joined(separator: ", ")
+                ))
+            }
         }
 
         // ── V-IMP-01 중복 fingerprint ──────────────────────────────────

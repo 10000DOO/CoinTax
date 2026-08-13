@@ -26,7 +26,8 @@ struct CostBasisEngine {
         var fxResolutions: [FXResolvedRate] = []
         var fxResolvedByDay: [String: FXResolvedRate] = [:]
         var deemedKeys: Set<String> = []
-        var shortfallKeys: Set<String> = []
+        /// 재고가 모자라 **처분하지 못한 수량**. 검증기가 이 값만큼만 차이를 봐준다.
+        var shortfallQty: [String: Decimal] = [:]
         /// 출금은 처리했는데 아직 도착(입금 이벤트)을 지나지 않은 전송의 이전 원가.
         /// 입금 시각에 입고하기 위해 잠시 들고 있는다.
         var pendingArrivals: [EventID: (qty: Decimal, cost: Decimal)] = [:]
@@ -229,7 +230,7 @@ struct CostBasisEngine {
             let b = book(for: e.accountID, asset: asset)
             let out = b.disposeClamped(qty: amount)
             if out.shortfallQty > Money.qtyEpsilon {
-                shortfallKeys.insert(bookKey(e.accountID, asset))
+                shortfallQty[bookKey(e.accountID, asset), default: 0] += out.shortfallQty
                 warnings.append("수수료 자산 \(asset.code) 장부 부족 \(Money.decimalString(out.shortfallQty)) — 그만큼 부대비용에 반영되지 않았습니다")
             }
             return out.costKRW
@@ -281,7 +282,7 @@ struct CostBasisEngine {
             case .buy:
                 let out = b.disposeClamped(qty: quoteQty)
                 if out.shortfallQty > Money.qtyEpsilon {
-                    shortfallKeys.insert(bookKey(e.accountID, quote))
+                    shortfallQty[bookKey(e.accountID, quote), default: 0] += out.shortfallQty
                     let dust = Money.isDustShortfall(out.shortfallQty, of: quoteQty)
                     issues.append(.init(
                         id: "V-QTY-02", severity: dust ? "warning" : "critical",
@@ -358,7 +359,7 @@ struct CostBasisEngine {
                     let costBefore = b.totalCost
                     let out = b.disposeClamped(qty: qty)
                     if out.shortfallQty > Money.qtyEpsilon {
-                        shortfallKeys.insert(bookKey(e.accountID, e.baseAsset))
+                        shortfallQty[bookKey(e.accountID, e.baseAsset), default: 0] += out.shortfallQty
                         let dust = Money.isDustShortfall(out.shortfallQty, of: qty)
                         issues.append(.init(
                             id: "V-QTY-02", severity: dust ? "warning" : "critical",
@@ -454,7 +455,7 @@ struct CostBasisEngine {
                     // 한쪽만 고쳐지고 다른 쪽이 남는다 — 실제로 그렇게 새어 나갔다 (감사 D4-1).
                     let out = b.disposeClamped(qty: wQty)
                     if out.shortfallQty > Money.qtyEpsilon {
-                        shortfallKeys.insert(bookKey(e.accountID, e.baseAsset))
+                        shortfallQty[bookKey(e.accountID, e.baseAsset), default: 0] += out.shortfallQty
                         let dust = Money.isDustShortfall(out.shortfallQty, of: wQty)
                         issues.append(.init(
                             id: "V-QTY-02", severity: dust ? "warning" : "critical",
@@ -474,7 +475,7 @@ struct CostBasisEngine {
                         if feeOut.shortfallQty > Money.qtyEpsilon {
                             // 여기서 기록하지 않으면 검증기가 원인 불명의 V-QTY-01 로만 알려
                             // 사용자가 무엇을 해야 하는지 모른다.
-                            shortfallKeys.insert(bookKey(e.accountID, e.baseAsset))
+                            shortfallQty[bookKey(e.accountID, e.baseAsset), default: 0] += feeOut.shortfallQty
                             let dust = Money.isDustShortfall(feeOut.shortfallQty, of: feeQty)
                             issues.append(.init(
                                 id: "V-QTY-02", severity: dust ? "warning" : "critical",
@@ -551,6 +552,11 @@ struct CostBasisEngine {
 
         process(pass1)
 
+        // 의제 스냅샷은 **여기까지의** 재생 결과다. 검증기(V-DEM-01)가 그 수량을 규칙과 대조할 때
+        // 봐줄 수 있는 부족량도 여기까지 것뿐이다 — 전체 기간 부족량을 쓰면 2027 이후에 난 부족까지
+        // 봐주게 되어 스냅샷의 진짜 차이를 놓친다.
+        let preTaxShortfallQty = shortfallQty
+
         // 과세 시작 시점에 「이동 중」인 전송이 있으면 그 수량은 어느 계정 장부에도 없다.
         // 의제취득가(2027-01-01 0시 보유분) 대상에서 빠지므로 사용자가 알아야 한다.
         if !pendingArrivals.isEmpty {
@@ -563,7 +569,8 @@ struct CostBasisEngine {
 
         // --- 의제취득가 적용 (2026-12-31 24:00 KST 스냅샷) ---
         // 「실제 취득가 vs 시가」 비교 단위는 세무 확인 대기 항목(TQ-01)이라 두 방식을 모두 지원한다.
-        //   positionAverage: 보유 전체 평균 단가와 비교 (기본 · 보수적)
+        //   positionAverage: 보유 전체 평균 단가와 비교 (기본. 보유 전체 취득가는 작게 잡히지만
+        //                    일부만 판 해에는 그해 세액이 건별 방식보다 작아질 수도 있다)
         //   perLot:          매입 건별로 각각 비교 (FIFO 계정에서만 결과가 달라진다)
         let deemedMode = policies.deemed.mode
         var deemedPositions: [DeemedPosition] = []
@@ -741,7 +748,8 @@ struct CostBasisEngine {
             issues: issues,
             fxUsageNotes: fxNotes,
             deemedAppliedKeys: deemedKeys,
-            shortfallKeys: shortfallKeys
+            shortfallQtyByKey: shortfallQty,
+            preTaxShortfallQtyByKey: preTaxShortfallQty
         )
     }
 }

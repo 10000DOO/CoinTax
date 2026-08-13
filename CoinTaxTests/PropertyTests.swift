@@ -266,9 +266,20 @@ final class PropertyTests: XCTestCase {
             // 세액은 음수가 될 수 없고, 과세표준이 0이면 세액도 0이다
             XCTAssertGreaterThanOrEqual(summary.totalTaxKRW, 0, "seed \(seed)")
             if summary.taxBaseKRW == 0 { XCTAssertEqual(summary.totalTaxKRW, 0, "seed \(seed)") }
-            // 건별 손익 합 == 소득금액
-            let pnl = summary.disposals.reduce(Decimal(0)) { $0 + $1.pnlKRW } - summary.extraDeductibleKRW
-            XCTAssertLessThanOrEqual(Money.abs(pnl - summary.netIncomeKRW), 1, "seed \(seed)")
+            // 소득금액을 **건별 구성요소**로 다시 더한다.
+            //
+            // 예전에는 `Σ pnl − 추가공제` 와 비교했는데, 집계기가 소득금액을 **글자 그대로 같은 식**으로
+            // 만들어서 실패할 수 없는 검사였다 (5차 감사 회차 20). pnl 을 믿지 않고
+            // 양도 − 취득 − 비용 으로 다시 더해야 엔진의 pnl 이 틀렸을 때 걸린다.
+            let recomputed = summary.disposals.reduce(Decimal(0)) {
+                $0 + ($1.proceedsKRW - $1.costKRW - $1.feesKRW)
+            } - summary.extraDeductibleKRW
+            XCTAssertLessThanOrEqual(Money.abs(recomputed - summary.netIncomeKRW), 1, "seed \(seed)")
+            // 리포트에 나란히 찍히는 세 숫자도 산수가 맞아야 한다
+            XCTAssertLessThanOrEqual(
+                Money.abs((summary.totalProceedsKRW - summary.totalCostsKRW) - summary.netIncomeKRW), 1,
+                "seed \(seed): 총수입 − 필요경비 ≠ 소득금액"
+            )
         }
     }
 

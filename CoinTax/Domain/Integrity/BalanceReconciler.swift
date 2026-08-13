@@ -124,4 +124,20 @@ enum BalanceReconciler {
     static func hasAnyPrintedBalance(_ events: [LedgerEvent]) -> Bool {
         events.contains { $0.balanceAfter != nil || $0.quoteBalanceAfter != nil }
     }
+
+    /// 잔고 열이 **하나도 없어서 외부 대조를 못 받은** 원본 종류.
+    ///
+    /// 「하나라도 잔고가 있으면 조용」하게 두면, 빗썸(잔고 있음)과 바이낸스(잔고 없음)를 함께 넣은
+    /// 사용자는 **바이낸스가 안 덮였다는 사실을 모른다.** 이 앱에서 잔고 대조는 유일하게
+    /// 앱 밖에서 온 정답지이므로, 어디까지 덮였는지는 사용자가 알아야 한다.
+    /// 대조 단위와 같은 `(계정, 원본 종류)` 로 보고, 사용자에게는 **원본 종류**로 알린다.
+    static func sourcesWithoutPrintedBalance(_ events: [LedgerEvent]) -> [String] {
+        var covered: Set<String> = []
+        var seen: Set<String> = []
+        for e in events where e.type != .ignored {
+            seen.insert(e.sourceKind)
+            if e.balanceAfter != nil || e.quoteBalanceAfter != nil { covered.insert(e.sourceKind) }
+        }
+        return seen.subtracting(covered).sorted()
+    }
 }
