@@ -196,7 +196,9 @@ final class FIFOBook: AssetBook {
 enum AssetBookFactory {
     static func make(_ method: CostBasisMethod) -> AssetBook {
         switch method {
-        case .movingAverage: return MovingAverageBook()
+        // 총평균법에서 계정 장부는 **수량만** 담당한다 (원가는 ResidentCostPool).
+        // 매입 건(lot) 개념이 없으므로 이동평균 장부를 그대로 쓴다.
+        case .totalAverage, .movingAverage: return MovingAverageBook()
         case .fifo: return FIFOBook()
         }
     }

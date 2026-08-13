@@ -45,6 +45,10 @@ struct CostBasisEngine {
         var feeIntoAcquisition: [(acquired: String, year: Int, feeAsset: String, feeQty: Decimal)] = []
         /// 직전 `feeCostKRW` 호출이 처분한 코인 수수료. 호출 직후 읽는다
         var lastCryptoFee: (asset: String, qty: Decimal)?
+        /// 처분에 붙은 **코인** 부대비용 (원화 수수료는 금액이 그대로라 기록하지 않는다)
+        var cryptoFeeOfDisposal: [UUID: (asset: String, qty: Decimal)] = [:]
+        /// 재고가 모자라 **일부만 처분된** 건의 실제 수량. 없으면 기록 수량 그대로다
+        var effectiveQtyOfDisposal: [UUID: Decimal] = [:]
         func yearOf(_ e: LedgerEvent) -> Int { TaxTime.calendarYearKST(e.timestamp) }
 
         // id 는 저장소에서 유일하지만, 방어적으로 첫 값을 채택한다 (중복 키로 프로세스가 죽지 않게)
@@ -247,10 +251,11 @@ struct CostBasisEngine {
                 shortfallQty[bookKey(e.accountID, asset), default: 0] += out.shortfallQty
                 warnings.append("수수료 자산 \(asset.code) 장부 부족 \(Money.decimalString(out.shortfallQty)) — 그만큼 부대비용에 반영되지 않았습니다")
             }
-            // 풀에는 **실제로 지갑에서 빠진 전량**을 넘긴다. 계정 장부가 모자라도
-            // 같은 사람의 다른 계정에 있을 수 있다 — 거주자별로 묶는 게 §88① 이다.
-            pool.dispose(asset: asset.code, year: yearOf(e), qty: amount)
-            lastCryptoFee = (asset: asset.code, qty: amount)
+            // 풀 수량은 **계정 장부 합과 정확히 같아야** 한다. 어긋나면 의제 재기동·보유
+            // 스냅샷에서 원가가 새로 생기거나 사라진다. 그래서 장부가 실제로 내보낸 만큼만 뺀다.
+            let feeOut = amount - out.shortfallQty
+            pool.dispose(asset: asset.code, year: yearOf(e), qty: feeOut)
+            lastCryptoFee = (asset: asset.code, qty: feeOut)
             return out.costKRW
         }
 
@@ -283,7 +288,7 @@ struct CostBasisEngine {
                     let out = b.disposeClamped(qty: quoteQty)
                     abandonedTotal += out.costKRW
                     abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW
-                    pool.abandon(asset: quote.code, year: yearOf(e), qty: quoteQty)
+                    pool.abandon(asset: quote.code, year: yearOf(e), qty: quoteQty - out.shortfallQty)
                 }
                 // 매도(견적자산을 받는 쪽)는 원가 근거가 없어 0원으로 입고한다.
                 if e.type == .sell {
@@ -301,7 +306,7 @@ struct CostBasisEngine {
             switch e.type {
             case .buy:
                 let out = b.disposeClamped(qty: quoteQty)
-                pool.dispose(asset: quote.code, year: yearOf(e), qty: quoteQty)
+                pool.dispose(asset: quote.code, year: yearOf(e), qty: quoteQty - out.shortfallQty)
                 if out.shortfallQty > Money.qtyEpsilon {
                     shortfallQty[bookKey(e.accountID, quote), default: 0] += out.shortfallQty
                     let dust = Money.isDustShortfall(out.shortfallQty, of: quoteQty)
@@ -330,6 +335,9 @@ struct CostBasisEngine {
                     fxSourceDate: fxResolvedByDay[TaxTime.dayKST(e.timestamp)]?.sourceDate,
                     deemedApplied: deemedKeys.contains(bookKey(e.accountID, quote))
                 ))
+                if out.shortfallQty > 0, let last = disposals.last {
+                    effectiveQtyOfDisposal[last.id] = quoteQty - out.shortfallQty
+                }
             case .sell:
                 b.acquire(qty: quoteQty, costKRW: quoteKRW)
                 pool.acquire(asset: quote.code, year: yearOf(e), qty: quoteQty, costKRW: quoteKRW)
@@ -363,7 +371,9 @@ struct CostBasisEngine {
                     // 환산 불가 — 원가 0으로 두고 Critical 이슈로 보고 (계산은 계속)
                     var cost = quoteKRW ?? 0
                     // base 수수료는 수량에 반영했으므로 금액에서 제외
-                    cost += feeCostKRW(e, skipAsset: e.baseAsset)
+                    let buyFeeCost = feeCostKRW(e, skipAsset: e.baseAsset)
+                    let buyCryptoFee = lastCryptoFee
+                    cost += buyFeeCost
                     // 취득가 0원 매수는 파싱이 깨졌다는 뜻이다. 조용히 통과시키면
                     // 이후 처분 전액이 이익으로 잡혀 세액이 크게 부풀려진다.
                     if qty > Money.qtyEpsilon, Money.isApproxZero(cost, eps: 0) {
@@ -376,8 +386,11 @@ struct CostBasisEngine {
                     book(for: e.accountID, asset: e.baseAsset).acquire(qty: qty, costKRW: cost)
                     // 풀에는 원화로 확정된 몫만 넣는다. 코인으로 낸 수수료 몫은 그 코인의
                     // 단가가 정해져야 알 수 있어 따로 적어 두고 정산 때 더한다.
-                    pool.acquire(asset: e.baseAsset.code, year: yearOf(e), qty: qty, costKRW: quoteKRW ?? 0)
-                    if let cf = lastCryptoFee {
+                    // 원화 수수료는 그 자리에서 원가가 확정된다 — 풀에 함께 넣지 않으면 사라진다.
+                    // 코인 수수료는 그 코인의 단가가 정해져야 알 수 있어 아래에 적어 둔다.
+                    pool.acquire(asset: e.baseAsset.code, year: yearOf(e), qty: qty,
+                                 costKRW: (quoteKRW ?? 0) + (buyCryptoFee == nil ? buyFeeCost : 0))
+                    if let cf = buyCryptoFee {
                         feeIntoAcquisition.append((acquired: e.baseAsset.code, year: yearOf(e), feeAsset: cf.asset, feeQty: cf.qty))
                     }
 
@@ -386,7 +399,8 @@ struct CostBasisEngine {
                     let b = book(for: e.accountID, asset: e.baseAsset)
                     let costBefore = b.totalCost
                     let out = b.disposeClamped(qty: qty)
-                    pool.dispose(asset: e.baseAsset.code, year: yearOf(e), qty: qty)
+                    pool.dispose(asset: e.baseAsset.code, year: yearOf(e), qty: qty - out.shortfallQty)
+                    let sellEffectiveQty = qty - out.shortfallQty
                     if out.shortfallQty > Money.qtyEpsilon {
                         shortfallQty[bookKey(e.accountID, e.baseAsset), default: 0] += out.shortfallQty
                         let dust = Money.isDustShortfall(out.shortfallQty, of: qty)
@@ -429,6 +443,7 @@ struct CostBasisEngine {
                     // 원본이 이미 순액인 판본(OKX Balance Change)만 중복 차감을 피해 건너뛴다.
                     let feeSkip: AssetSymbol? = e.quantityIsNetOfFee ? e.baseAsset : nil
                     let fees = feeCostKRW(e, skipAsset: feeSkip)
+                    let sellCryptoFee = lastCryptoFee
 
                     // 과세 시작(2027) 전 처분도 기록한다. 신고 대상은 아니지만, 기록하지 않으면
                     // 2027 이 오기 전에는 자기 손익을 볼 방법이 아예 없다 (리포트가 늘 0원).
@@ -452,6 +467,10 @@ struct CostBasisEngine {
                         fxSourceDate: usedFX?.sourceDate,
                         deemedApplied: deemedKeys.contains(bookKey(e.accountID, e.baseAsset))
                     ))
+                    if let last = disposals.last {
+                        if let cf = sellCryptoFee { cryptoFeeOfDisposal[last.id] = cf }
+                        if sellEffectiveQty != qty { effectiveQtyOfDisposal[last.id] = sellEffectiveQty }
+                    }
 
                 case .deposit:
                     seenDeposits.insert(e.id)
@@ -503,7 +522,7 @@ struct CostBasisEngine {
                     if let feeQty = LedgerDelta.withdrawalFeeQuantity(e) {
                         let feeOut = b.disposeClamped(qty: feeQty)
                         explicitFee = feeOut.costKRW
-                        explicitFeeQty = feeQty
+                        explicitFeeQty = feeQty - feeOut.shortfallQty
                         if feeOut.shortfallQty > Money.qtyEpsilon {
                             // 여기서 기록하지 않으면 검증기가 원인 불명의 V-QTY-01 로만 알려
                             // 사용자가 무엇을 해야 하는지 모른다.
@@ -529,7 +548,13 @@ struct CostBasisEngine {
                         )
                         // 자기 계정 간 이동은 **같은 풀 안의 이동**이라 원가가 움직이지 않는다.
                         // 네트워크 수수료로 실제 사라진 수량만 뺀다 (백서 U-10 · Q2 = 폐기).
-                        pool.abandon(asset: e.baseAsset.code, year: yearOf(e), qty: max(0, wQty - rQty) + explicitFeeQty)
+                        // 장부의 순변화 = −(실제 나간 수량) + 도착 수량. 풀도 똑같이 움직여야 한다.
+                        let poolOut = (wQty - out.shortfallQty) + explicitFeeQty
+                        if poolOut > rQty {
+                            pool.abandon(asset: e.baseAsset.code, year: yearOf(e), qty: poolOut - rQty)
+                        } else if rQty > poolOut {
+                            pool.acquire(asset: e.baseAsset.code, year: yearOf(e), qty: rQty - poolOut, costKRW: 0)
+                        }
                         abandonedTotal += result.abandonedCostKRW
                         extraDeductible += result.deductibleExpenseKRW
                         let year = TaxTime.calendarYearKST(e.timestamp)
@@ -551,7 +576,7 @@ struct CostBasisEngine {
                         ))
                     } else {
                         // 원금 + 별도 출금 수수료의 원가가 함께 소멸한다
-                        pool.abandon(asset: e.baseAsset.code, year: yearOf(e), qty: wQty + explicitFeeQty)
+                        pool.abandon(asset: e.baseAsset.code, year: yearOf(e), qty: (wQty - out.shortfallQty) + explicitFeeQty)
                         abandonedTotal += out.costKRW + explicitFee
                         abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW + explicitFee
                         warnings.append("미매칭 출금 원가 소멸: \(e.baseAsset.code) \(Money.decimalString(wQty))")
@@ -587,7 +612,42 @@ struct CostBasisEngine {
             }
         }
 
+        // 과세기간 목록. 총평균법은 **직전 해 기말이 다음 해 기초**라 거래가 없는 해도 건너뛰면 안 된다.
+        let eventYears = Set(sorted.map { yearOf($0) })
+        let preYears: [Int] = {
+            guard let lo = eventYears.filter({ $0 < TaxTime.taxStartYear }).min() else { return [] }
+            // 2026 까지 이어 붙인다 — 의제취득가는 「2026 말 단가」와 시가를 비교한다
+            return Array(lo...(TaxTime.taxStartYear - 1))
+        }()
+        let postYears: [Int] = {
+            guard let hi = eventYears.filter({ $0 >= TaxTime.taxStartYear }).max() else { return [] }
+            return Array(TaxTime.taxStartYear...hi)
+        }()
+
+        /// 코인으로 낸 수수료가 취득원가에 더해지면 **단가가 서로를 참조할 수 있다**
+        /// (BNB 로 BTC 수수료를 내고 BTC 로 BNB 수수료를 내는 경우). 몇 번 돌려 수렴시킨다 —
+        /// 수수료는 거래액의 0.1% 수준이라 두세 번이면 1원 미만으로 붙는다.
+        func settleConverging(_ years: [Int]) {
+            guard !years.isEmpty else { return }
+            let target = Set(years)
+            for _ in 0..<3 {
+                var derived: [String: [Int: Decimal]] = [:]
+                for f in feeIntoAcquisition where target.contains(f.year) {
+                    let unit = pool.unitCost(asset: f.feeAsset, year: f.year) ?? 0
+                    derived[f.acquired, default: [:]][f.year, default: 0] += unit * f.feeQty
+                }
+                for (asset, byYear) in derived {
+                    for (year, cost) in byYear {
+                        pool.setDerivedAcquisitionCost(asset: asset, year: year, costKRW: cost)
+                    }
+                }
+                pool.settle(years: years)
+            }
+        }
+
         process(pass1)
+        // 의제취득가 비교에 「2026 말 총평균단가」가 필요하므로 여기서 한 번 정산한다
+        settleConverging(preYears)
 
         // 의제 스냅샷은 **여기까지의** 재생 결과다. 검증기(V-DEM-01)가 그 수량을 규칙과 대조할 때
         // 봐줄 수 있는 부족량도 여기까지 것뿐이다 — 전체 기간 부족량을 쓰면 2027 이후에 난 부족까지
@@ -604,13 +664,47 @@ struct CostBasisEngine {
             ))
         }
 
-        // --- 의제취득가 적용 (2026-12-31 24:00 KST 스냅샷) ---
-        // 「실제 취득가 vs 시가」 비교 단위는 세무 확인 대기 항목(TQ-01)이라 두 방식을 모두 지원한다.
-        //   positionAverage: 보유 전체 평균 단가와 비교 (기본. 보유 전체 취득가는 작게 잡히지만
-        //                    일부만 판 해에는 그해 세액이 건별 방식보다 작아질 수도 있다)
-        //   perLot:          매입 건별로 각각 비교 (FIFO 계정에서만 결과가 달라진다)
-        let deemedMode = policies.deemed.mode
+        // --- 의제취득가 적용 (2027-01-01 0시 기준) ---
+        //
+        // `[법]` §37⑤ — 2027-01-01 전에 보유하던 가상자산의 취득가액은 「2026-12-31 당시의
+        // 시가」와 실제 취득가액 중 **큰 금액**으로 한다.
+        //
+        // 총평균법에서는 비교 대상이 **자산별 거주자 단가 하나**다. 계정마다·매입 건마다 따로
+        // 비교할 대상이 존재하지 않는다 (백서 U-09 · 작업문서 Q1 결정).
         var deemedPositions: [DeemedPosition] = []
+        var qtyByAsset: [String: Decimal] = [:]
+        for (_, map) in books {
+            for (code, b) in map where b.quantity > Money.qtyEpsilon {
+                qtyByAsset[code, default: 0] += b.quantity
+            }
+        }
+        var deemedUnitByAsset: [String: Decimal] = [:]
+        var bookUnitByAsset: [String: Decimal] = [:]
+        for code in qtyByAsset.keys.sorted() {
+            let bookUnit = pool.unitCost(asset: code, year: TaxTime.taxStartYear - 1) ?? 0
+            bookUnitByAsset[code] = bookUnit
+            let market = marketPrices[code]
+            if market == nil {
+                missingMarket.insert(code)
+                let pending = TaxTime.isBeforeTaxStart()
+                issues.append(.init(
+                    id: "V-DEM-04", severity: pending ? "warning" : "critical",
+                    message: pending
+                        ? "2027-01-01 0시 시가는 그날이 지나야 나옵니다 — 지금은 실제 산 값으로 계산했습니다 (그때 넣으면 취득가가 올라가 세금이 줄 수 있습니다)"
+                        : "2027-01-01 0시 시가가 없어 의제취득가를 확정할 수 없습니다",
+                    context: code
+                ))
+            }
+            guard let unit = policies.deemed.deemedUnit(bookUnit: bookUnit, marketUnit: market) else { continue }
+            deemedUnitByAsset[code] = unit
+            // 풀의 2027 기초를 못박는다. 시가가 없어 의제를 적용하지 못한 자산은
+            // 그대로 2026 기말이 이어진다 (실제 산 값으로 계산).
+            let total = qtyByAsset[code] ?? 0
+            pool.setOpening(asset: code, year: TaxTime.taxStartYear, qty: total, costKRW: total * unit)
+        }
+
+        // 스냅샷은 **계정별로** 발행한다 — 검증기(V-DEM-01)가 계정별 수량을 규칙과 대조한다.
+        // 단가는 전부 자산 단위 값이라 같은 자산이면 계정이 달라도 같다.
         let deemedTargets = books
             .flatMap { accID, map in map.map { (accID, $0.key, $0.value) } }
             .sorted { lhs, rhs in
@@ -619,80 +713,22 @@ struct CostBasisEngine {
             }
         for (accID, assetCode, b) in deemedTargets {
             guard b.quantity > Money.qtyEpsilon else { continue }
-            let asset = AssetSymbol(assetCode)
-            let bookUnit = b.snapshotUnitCost()
-            let market = marketPrices[assetCode]
-            if market == nil {
-                missingMarket.insert(assetCode)
-                let pending = TaxTime.isBeforeTaxStart()
-                issues.append(.init(
-                    id: "V-DEM-04", severity: pending ? "warning" : "critical",
-                    message: pending
-                        ? "2027-01-01 0시 시가는 그날이 지나야 나옵니다 — 지금은 실제 산 값으로 계산했습니다 (그때 넣으면 취득가가 올라가 세금이 줄 수 있습니다)"
-                        : "2027-01-01 0시 시가가 없어 의제취득가를 확정할 수 없습니다",
-                    context: assetCode
-                ))
-            }
-            guard policies.deemed.deemedUnit(bookUnit: bookUnit, marketUnit: market) != nil else {
-                continue
-            }
-            let qty = b.quantity
-            let lots = b.openLots
-
-            // 재기동할 lot 구성 계산
-            let newLots: [(qty: Decimal, unitCost: Decimal)]
-            if deemedMode == .perLot, !lots.isEmpty {
-                newLots = lots.compactMap { lot in
-                    guard let unit = policies.deemed.deemedUnit(bookUnit: lot.unitCost, marketUnit: market) else { return nil }
-                    return (qty: lot.qty, unitCost: unit)
-                }
-            } else {
-                // 평균 방식, 또는 lot 개념이 없는 이동평균 장부
-                guard let unit = policies.deemed.deemedUnit(bookUnit: bookUnit, marketUnit: market) else { continue }
-                newLots = [(qty: qty, unitCost: unit)]
-            }
-            guard !newLots.isEmpty else { continue }
-
-            let deemedTotal = newLots.reduce(Decimal(0)) { $0 + $1.qty * $1.unitCost }
-            // lot 이 하나면 단가를 **그대로** 쓴다. 곱했다가 다시 나누면 소수 자릿수 한계 때문에
-            // 원래 단가로 정확히 돌아오지 않고, 검증기의 「의제 단가 max」 검사가 정상 계산을
-            // Critical 로 막는다 (무작위 시나리오 테스트에서 발견).
-            let deemedUnit: Decimal = {
-                if newLots.count == 1 { return newLots[0].unitCost }
-                return Money.isApproxZero(qty) ? 0 : deemedTotal / qty
-            }()
-            // 건별 방식에서는 lot 마다 채택 근거가 갈릴 수 있다 → 그대로 표기한다
-            let reason: String = {
-                guard let m = market else { return "actual" }
-                let tookMarket = newLots.filter { $0.unitCost == m }.count
-                if deemedMode == .perLot, newLots.count > 1 {
-                    if tookMarket == 0 { return "actual" }
-                    if tookMarket == newLots.count { return "market" }
-                    return "mixed(\(tookMarket)/\(newLots.count) market)"
-                }
-                return deemedUnit > bookUnit ? "market" : "actual"
-            }()
+            guard let unit = deemedUnitByAsset[assetCode] else { continue }
+            let bookUnit = bookUnitByAsset[assetCode] ?? 0
             deemedPositions.append(DeemedPosition(
                 accountID: accID,
-                asset: asset,
-                quantity: qty,
+                asset: AssetSymbol(assetCode),
+                quantity: b.quantity,
                 bookUnitKRW: bookUnit,
-                marketUnitKRW: market,
-                deemedUnitKRW: deemedUnit,
-                reason: reason,
-                basisMode: deemedMode.rawValue,
-                lotCount: newLots.count
+                marketUnitKRW: marketPrices[assetCode],
+                deemedUnitKRW: unit,
+                reason: unit > bookUnit ? "market" : "actual",
+                basisMode: policies.deemed.mode.rawValue,
+                lotCount: 1
             ))
-            b.replaceLots(newLots)
-            deemedKeys.insert(bookKey(accID, asset))
-            // V-DEM-03: 재기동 직후 총원가 == 의제 총액
-            if Money.abs(b.totalCost - deemedTotal) > 1 {
-                issues.append(.init(
-                    id: "V-DEM-03", severity: "critical",
-                    message: "의제 재기동 후 장부 총원가가 의제 총액과 다릅니다",
-                    context: assetCode
-                ))
-            }
+            // 계정 장부는 수량만 담당하지만, 재기동해 두어야 이후 재고 검증이 맞는다
+            b.replaceLots([(qty: b.quantity, unitCost: unit)])
+            deemedKeys.insert(bookKey(accID, AssetSymbol(assetCode)))
         }
 
         process(pass2)
@@ -707,42 +743,71 @@ struct CostBasisEngine {
             ))
         }
 
+        // --- 연도별 총평균단가 확정 (2027 이후) ---
+        settleConverging(postYears)
+
+        // --- 처분 원가를 풀에서 채운다 ---
+        //
+        // 재생 중에는 수량·양도가액만 확정할 수 있었다. 총평균단가는 과세기간이 끝나야
+        // 정해지므로(§92②4) 여기서 되돌아가 필요경비를 채운다.
+        for i in disposals.indices {
+            let d = disposals[i]
+            let effQty = effectiveQtyOfDisposal[d.id] ?? d.quantity
+            guard let cost = pool.costOfDisposal(asset: d.asset.code, year: d.taxYear, qty: effQty) else {
+                issues.append(.init(
+                    id: "V-COST-01", severity: "critical",
+                    message: "총평균단가를 확정하지 못해 취득가액을 채우지 못했습니다",
+                    context: "\(d.asset.code) \(d.taxYear)"
+                ))
+                continue
+            }
+            // 코인으로 낸 부대비용도 그 코인의 그해 단가로 다시 잡는다 (원화 수수료는 그대로)
+            var fees = d.feesKRW
+            if let cf = cryptoFeeOfDisposal[d.id] {
+                fees = (pool.unitCost(asset: cf.asset, year: d.taxYear) ?? 0) * cf.qty
+            }
+            disposals[i].costKRW = cost
+            disposals[i].feesKRW = fees
+            disposals[i].pnlKRW = d.proceedsKRW - cost - fees
+            disposals[i].method = .totalAverage
+        }
+
+        // --- 소실 원가도 풀 단가 기준으로 ---
+        // 재생 중에 더한 값은 계정 장부 원가라 총평균법과 다르다. 통째로 교체한다.
+        let poolAbandoned = pool.abandonedCostByYear()
+        abandonedByYear = poolAbandoned
+        abandonedTotal = poolAbandoned.values.reduce(0, +)
+
+        // --- 풀이 본 수량 부족 ---
+        // 계정별 검증(V-QTY-02)과 달리 **거주자 전체**로 봐도 모자란 경우다.
+        // 총평균법에서는 계정 하나가 빠져도 전체 단가가 틀어지므로 따로 알린다.
+        for w in pool.settleWarnings {
+            issues.append(.init(
+                id: "V-QTY-05", severity: "warning",
+                message: "가진 것보다 많이 처분했습니다 (\(w.year)년 \(w.asset) 부족 \(Money.decimalString(w.shortQty))) — 거래소·지갑 자료가 빠지면 총평균법에서는 그 계정만이 아니라 **전체 세액**이 틀어집니다",
+                context: "\(w.asset) \(w.year)"
+            ))
+        }
+
         // --- 보유 스냅샷 (결정적 순서) ---
+        // 단가·총원가는 **마지막 과세기간의 총평균단가** 기준이다 (계정 장부 원가가 아니다).
+        let lastSettledYear = postYears.last ?? preYears.last
         var rows: [HoldingsRow] = []
         var aggMap: [String: (qty: Decimal, cost: Decimal)] = [:]
         for (accID, assetMap) in books {
             for (code, b) in assetMap {
                 guard b.quantity > Money.qtyEpsilon else { continue }
-                let unit = b.snapshotUnitCost()
+                let unit = lastSettledYear.flatMap { pool.unitCost(asset: code, year: $0) } ?? 0
                 rows.append(HoldingsRow(
                     accountID: accID,
                     asset: AssetSymbol(code),
                     quantity: b.quantity,
                     averageUnitKRW: unit,
-                    totalCostKRW: b.totalCost,
-                    method: b.method
+                    totalCostKRW: unit * b.quantity,
+                    method: .totalAverage
                 ))
-                // V-COST-04 / V-COST-05
-                if Money.abs(unit * b.quantity - b.totalCost) > 1 {
-                    issues.append(.init(
-                        id: "V-COST-04", severity: "critical",
-                        message: "평단 × 수량이 총원가와 다릅니다",
-                        context: code
-                    ))
-                }
-                if b.method == .fifo {
-                    let lotQty = b.openLots.reduce(Decimal(0)) { $0 + $1.qty }
-                    let lotCost = b.openLots.reduce(Decimal(0)) { $0 + $1.qty * $1.unitCost }
-                    if Money.abs(lotQty - b.quantity) > Money.qtyEpsilon || Money.abs(lotCost - b.totalCost) > 1 {
-                        issues.append(.init(
-                            id: "V-COST-05", severity: "critical",
-                            message: "FIFO 열린 lot 합이 포지션과 다릅니다",
-                            context: code
-                        ))
-                    }
-                }
                 let prev = aggMap[code] ?? (0, 0)
-                aggMap[code] = (prev.qty + b.quantity, prev.cost + b.totalCost)
+                aggMap[code] = (prev.qty + b.quantity, prev.cost + unit * b.quantity)
             }
         }
         rows.sort {

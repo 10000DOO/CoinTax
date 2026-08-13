@@ -12,9 +12,10 @@ struct PolicyBundle: Sendable {
 
     static var v1Default: PolicyBundle {
         PolicyBundle(
-            id: "cointax-v1.2",   // v1.2: 원가법 고지에 개인지갑 포함 (TaxCopy.costMethods)
+            // v2.0: 원가법을 거주자별 총평균법으로 교체 (시행령 §88①). 계산 결과가 v1 과 다르다
+            id: "cointax-v2.0",
             transferCost: AbandonLostCostPolicy(),
-            costMethodResolver: VASPMAElseFIFOResolver(),
+            costMethodResolver: TotalAverageResolver(),
             deemed: MaxBookMarketDeemedPolicy(),
             taxRate: KROtherIncomeTaxRatePolicy(),
             rounding: StatutoryKRWRoundingPolicy(),

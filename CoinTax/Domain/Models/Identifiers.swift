@@ -38,6 +38,10 @@ enum ExchangeCode: String, Codable, Sendable {
 }
 
 enum CostBasisMethod: String, Codable, Sendable {
+    /// `[영]` 소득세법 시행령 §88① — 거주자별 총평균법 (2027-01-01 시행). 현행 규정
+    case totalAverage
+    /// 2025-02-28 개정으로 **폐지된** 옛 규정(가상자산주소별 이동평균/선입선출).
+    /// 과거 계산 스냅샷을 읽기 위해 남겨 둔다
     case movingAverage, fifo
 }
 

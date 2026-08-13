@@ -44,6 +44,8 @@ final class ResidentCostPool {
     private var derivedAcquisitionCosts: [String: [Int: Decimal]] = [:]
     private(set) var unitCosts: [String: [Int: Decimal]] = [:]
     private(set) var closings: [String: [Int: Position]] = [:]
+    /// 가진 것보다 많이 내보낸 해의 **원가 배분 비율**. 없는 원가를 공제할 수는 없다.
+    private var outflowScales: [String: [Int: Decimal]] = [:]
     /// 정산 중 발견한 문제 (수량이 모자라 기말이 음수가 되는 경우 등)
     private(set) var settleWarnings: [(asset: String, year: Int, shortQty: Decimal)] = []
 
@@ -112,7 +114,13 @@ final class ResidentCostPool {
                 let unit: Decimal = Money.isApproxZero(totalQty) ? 0 : totalCost / totalQty
                 unitCosts[asset, default: [:]][year] = unit
 
-                var endQty = totalQty - flow.disposedQty - flow.abandonedQty
+                // 나간 수량이 가진 것보다 많으면(자료 누락) **가진 원가만큼만** 배분한다.
+                // 자르지 않으면 처분 원가 합이 취득 원가 합을 넘어 원가가 새어 나간다.
+                let demand = flow.disposedQty + flow.abandonedQty
+                outflowScales[asset, default: [:]][year] =
+                    (demand > totalQty && demand > 0) ? totalQty / demand : 1
+
+                var endQty = totalQty - demand
                 if endQty < 0 {
                     // 자료가 빠져 판 수량이 산 수량을 넘었다. 계정별 검증(V-QTY-02)이 이미
                     // 잡지만, 풀은 **계정을 합치므로** 한 계정의 누락이 여기서야 드러나기도 한다.
@@ -149,14 +157,14 @@ final class ResidentCostPool {
     /// **0 을 돌려주면 안 된다.** 원가 0 은 전액이 이익이라는 뜻이라 세액이 크게 부풀려진다.
     func costOfDisposal(asset: String, year: Int, qty: Decimal) -> Decimal? {
         guard let unit = unitCost(asset: asset, year: year) else { return nil }
-        return unit * qty
+        return unit * qty * (outflowScales[asset]?[year] ?? 1)
     }
 
     /// 그 해 소실분의 원가 합계 (회수되지 않는 몫). 정산 전이면 0.
     func abandonedCost(asset: String, year: Int) -> Decimal {
         guard let unit = unitCost(asset: asset, year: year),
               let qty = flows[asset]?[year]?.abandonedQty else { return 0 }
-        return unit * qty
+        return unit * qty * (outflowScales[asset]?[year] ?? 1)
     }
 
     /// 연도별 소실 원가 합계 (모든 자산)
@@ -165,7 +173,7 @@ final class ResidentCostPool {
         for (asset, byYear) in flows {
             for (year, flow) in byYear where flow.abandonedQty > 0 {
                 guard let unit = unitCosts[asset]?[year] else { continue }
-                out[year, default: 0] += unit * flow.abandonedQty
+                out[year, default: 0] += unit * flow.abandonedQty * (outflowScales[asset]?[year] ?? 1)
             }
         }
         return out
