@@ -43,7 +43,12 @@ enum ReportCSVExporter {
         tax("abandonedTransferCostKRW", summary.abandonedTransferCostKRW)
         // 채택한 방식의 의제취득가 **총액**. 화면에는 「합계」로 있는데 파일에만 없었다 —
         // 신고서 취득가액 칸에 옮겨 적는 값이라 파일에 없으면 화면을 다시 봐야 한다.
-        if !summary.deemed.isEmpty {
+        //
+        // 다만 **과세 시작 전 예상 연도**에는 싣지 않는다. 화면이 그 표를 일부러 감추기 때문이다
+        // (의제취득가는 2027 이후 처분에만 쓰인다). 화면이 감춘 것을 파일이 실으면
+        // 「파일을 보고 신고서를 쓴다」는 원칙이 거꾸로 깨진다 (4차 감사 D-7·D4-2 의 반대 방향).
+        let showsDeemed = !summary.deemed.isEmpty && summary.taxYear >= TaxTime.taxStartYear
+        if showsDeemed {
             tax("totalDeemedCostKRW", summary.totalDeemedCostKRW)
         }
 
@@ -55,7 +60,7 @@ enum ReportCSVExporter {
             rows.append(["disposal", "audit", d.fxRateUsed.map { Money.decimalString($0) } ?? "", d.fxSourceDate ?? "", d.deemedApplied ? "deemed" : "actual"])
         }
 
-        for dem in summary.deemed {
+        for dem in (showsDeemed ? summary.deemed : []) {
             rows.append([
                 "deemed", dem.asset.code,
                 Money.decimalString(dem.quantity),

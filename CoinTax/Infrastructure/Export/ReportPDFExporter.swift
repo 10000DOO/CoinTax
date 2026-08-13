@@ -105,7 +105,8 @@ enum ReportPDFExporter {
         }
         lines.append("")
 
-        if !s.deemed.isEmpty {
+        // 과세 시작 전 예상 연도에는 화면과 같이 감춘다 (의제취득가는 2027 이후 처분에만 쓰인다)
+        if !s.deemed.isEmpty, s.taxYear >= TaxTime.taxStartYear {
             let modeLabel = DeemedBasisMode(rawValue: s.deemedBasisMode)?.label ?? s.deemedBasisMode
             lines.append("의제취득가 (2027-01-01 0시 기준 · \(modeLabel))")
             for d in s.deemed {
