@@ -91,37 +91,11 @@ final class CalculationPipeline {
         summary.deemedBasisMode = policies.deemed.mode.rawValue
         summary2.deemedBasisMode = policies.deemed.mode.rawValue
 
-        // TQ-01 미결: 다른 의제 산정 방식으로도 계산해 결과 차이를 함께 보여준다.
-        // 의제 대상 포지션이 없으면 두 방식이 같으므로 건너뛴다.
-        // lot 이 2개 이상인 선입선출 포지션이 있을 때만 두 방식의 결과가 갈린다.
-        // 그렇지 않으면 계산을 한 번 더 돌릴 이유가 없다 (10만 건 재계산 예산 보호).
-        let modesCanDiffer = replay.deemedPositions.contains { $0.lotCount > 1 }
-            || replay.deemedPositions.contains { $0.marketUnitKRW != nil && $0.quantity > 0 && $0.lotCount == 1 && policies.deemed.mode == .positionAverage }
-        if !replay.deemedPositions.isEmpty, modesCanDiffer {
-            let otherMode = policies.deemed.mode.other
-            var altPolicies = policies
-            altPolicies.deemed = MaxBookMarketDeemedPolicy(mode: otherMode)
-            var altEngine = engine
-            altEngine.policies = altPolicies
-            if let altReplay = try? altEngine.replay(events: events, links: links) {
-                let altSummary = TaxAggregator.aggregate(
-                    projectID: ProjectID(project.id),
-                    disposals: altReplay.disposals,
-                    taxYear: taxYear,
-                    extraDeductible: altReplay.extraDeductibleByYear[taxYear] ?? 0,
-                    abandonedTransferCostKRW: altReplay.abandonedByYear[taxYear] ?? 0,
-                    deemed: altReplay.deemedPositions,
-                    policies: altPolicies
-                )
-                summary.deemedAlternative = DeemedAlternative(
-                    basisMode: otherMode.rawValue,
-                    basisLabel: otherMode.label,
-                    totalDeemedCostKRW: altSummary.totalDeemedCostKRW,
-                    netIncomeKRW: altSummary.netIncomeKRW,
-                    totalTaxKRW: altSummary.totalTaxKRW
-                )
-            }
-        }
+        // 「다른 방식으로 계산하면」 비교는 없어졌다.
+        //
+        // `[영]` 소득세법 시행령 §88① 이 거주자별 총평균법이 되면서 **매입 건(lot) 개념이
+        // 사라졌고**, 비교 대상은 자산별 단가 하나뿐이라 두 번 돌릴 이유가 없다
+        // (작업문서 Q1 결정). 예전에는 여기서 엔진을 한 번 더 돌려 두 값을 나란히 보여줬다.
 
         // 전송 링크에 계산된 원가를 기록 (14-spec §1 "filled after calc") — 감사 추적용
         let detailByLink = Dictionary(replay.transferCostDetails.map { ($0.linkID.raw, $0) }, uniquingKeysWith: { a, _ in a })

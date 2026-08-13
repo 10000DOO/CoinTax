@@ -124,18 +124,10 @@ final class OracleTaxPathTests: XCTestCase {
         XCTAssertEqual(s.taxBaseKRW, 3_100_000)
         XCTAssertEqual(s.totalTaxKRW, 682_000)
 
-        // 건별 방식
-        policies.deemed = MaxBookMarketDeemedPolicy(mode: .perLot)
-        engine.policies = policies
-        replay = try engine.replay(events: events, links: [])
-        dem = try XCTUnwrap(replay.deemedPositions.first)
-        XCTAssertEqual(dem.lotCount, 2)
-        XCTAssertEqual(dem.totalDeemedKRW, 19_000_000, "2×350만 + 3×400만")
-        s = aggregate(replay, policies, year: 2027, projectID: projectID)
-        XCTAssertEqual(s.totalCostsKRW, 15_000_000, "선입선출: 2×350만 + 2×400만")
-        XCTAssertEqual(s.netIncomeKRW, 5_000_000)
-        XCTAssertEqual(s.taxBaseKRW, 2_500_000)
-        XCTAssertEqual(s.totalTaxKRW, 550_000)
+        // 「건별 방식」 비교는 폐지됐다 — `[영]` §88① 이 거주자별 총평균법이 되면서
+        // 매입 건(lot) 개념이 사라졌다 (작업문서 Q1). 위 평균 방식이 유일한 계산이다.
+        XCTAssertEqual(dem.lotCount, 1)
+        XCTAssertEqual(replay.deemedPositions.count, 1)
     }
 
     // MARK: - C. 코인↔코인 교환 (환율 경유) — 양쪽 leg

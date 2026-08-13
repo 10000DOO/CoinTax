@@ -289,11 +289,11 @@ final class AuditProbeTests: XCTestCase {
             let r = try replay([b1, b2], accounts: [acc], market: ["BTC": 60_000_000], policies: policies)
             return r.deemedPositions.reduce(Decimal(0)) { $0 + $1.totalDeemedKRW }
         }
+        // 「건별」 방식은 폐지됐다 (`[영]` §88① · 작업문서 Q1). 거주자 평균 하나만 남는다 —
+        // 4천만·8천만에 1개씩, 시가 6천만 → 평균 6천만, max(6천만,6천만) × 2 = 1.2억
         let avg = try deemedTotal(.positionAverage)
-        let perLot = try deemedTotal(.perLot)
-        print("PROBE TQ-01: 평균=\(Money.decimalString(avg)) 건별=\(Money.decimalString(perLot))")
+        print("PROBE TQ-01: 거주자 평균=\(Money.decimalString(avg))")
         XCTAssertEqual(avg, 120_000_000)
-        XCTAssertEqual(perLot, 140_000_000)
     }
 
     // MARK: - V3 화면·CSV·PDF 가 같은 숫자를 적는가

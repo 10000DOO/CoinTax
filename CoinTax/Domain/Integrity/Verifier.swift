@@ -354,16 +354,10 @@ enum Verifier {
             if let m = d.marketUnitKRW {
                 // 「실제 취득가와 시가 중 큰 값」이 하한이다.
                 //
-                // 매입 건별(perLot) 방식에서 lot 이 둘 이상이면 채택 단가는 lot 별 max 의 **가중평균**이라
-                // 하한보다 커지는 게 정상이다. 같아야 한다고 보면 정상 계산이 Critical 로 막힌다.
-                //
-                // 원 단위 비교도 정확히 하지 않는다 — 단가는 나눗셈에서 나오므로 마지막 자리가 흔들린다.
+                // 원 단위 비교는 정확히 하지 않는다 — 단가는 나눗셈에서 나오므로 마지막 자리가 흔들린다.
                 let floorUnit = max(d.bookUnitKRW, m)
                 let tolerance = max(Money.abs(floorUnit) * Decimal(string: "0.000001")!, 1)
-                let perLotMixed = d.basisMode == DeemedBasisMode.perLot.rawValue && d.lotCount > 1
-                let ok = perLotMixed
-                    ? d.deemedUnitKRW >= floorUnit - tolerance
-                    : Money.abs(d.deemedUnitKRW - floorUnit) <= tolerance
+                let ok = Money.abs(d.deemedUnitKRW - floorUnit) <= tolerance
                 if !ok {
                     issues.append(.init(
                         id: "V-DEM-02", severity: "critical",
@@ -385,9 +379,8 @@ enum Verifier {
         // 이게 뒤집혔다면 두 실행 중 하나가 다른 자료·다른 정책으로 돌았다는 뜻이다.
         if let alt = s.deemedAlternative, !s.deemed.isEmpty {
             let tolerance = Decimal(max(1, s.deemed.count))
-            let perLotIsAlt = alt.basisMode == DeemedBasisMode.perLot.rawValue
-            let bigger = perLotIsAlt ? alt.totalDeemedCostKRW : s.totalDeemedCostKRW
-            let smaller = perLotIsAlt ? s.totalDeemedCostKRW : alt.totalDeemedCostKRW
+            let bigger = max(alt.totalDeemedCostKRW, s.totalDeemedCostKRW)
+            let smaller = min(alt.totalDeemedCostKRW, s.totalDeemedCostKRW)
             if bigger < smaller - tolerance {
                 issues.append(.init(
                     id: "V-DEM-06", severity: "critical",

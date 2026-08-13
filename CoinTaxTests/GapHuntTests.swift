@@ -208,32 +208,9 @@ final class GapHuntTests: XCTestCase {
     }
 
     // MARK: G6 — 건별 방식에서 채택 근거가 갈리면 그대로 표기
+    // 「매입 건별」 의제 방식은 폐지됐다 — `[영]` §88① 이 거주자별 총평균법이 되면서
+    // 매입 건(lot) 개념 자체가 사라졌다 (작업문서 Q1). 그 방식 전용 테스트를 지운다.
 
-    func testPerLotMixedReasonIsLabelled() throws {
-        let acc = Account.defaults(for: .binance, projectID: projectID)
-        let cheap = LedgerEvent(
-            projectID: projectID, accountID: acc.id,
-            timestamp: TaxTime.dateKST(year: 2025, month: 3, day: 1),
-            type: .buy, baseAsset: AssetSymbol("BTC"), quoteAsset: AssetSymbol("KRW"),
-            quantity: 1, quoteAmountKRW: 40_000_000, sourceKind: "t", rawRef: "r1"
-        )
-        let pricey = LedgerEvent(
-            projectID: projectID, accountID: acc.id,
-            timestamp: TaxTime.dateKST(year: 2026, month: 3, day: 1),
-            type: .buy, baseAsset: AssetSymbol("BTC"), quoteAsset: AssetSymbol("KRW"),
-            quantity: 1, quoteAmountKRW: 80_000_000, sourceKind: "t", rawRef: "r2"
-        )
-        var policies = PolicyBundle.v1Default
-        policies.deemed = MaxBookMarketDeemedPolicy(mode: .perLot)
-        let engine = CostBasisEngine(
-            policies: policies, accountsByID: [acc.id: acc],
-            fxRates: [:], marketPrices: ["BTC": 60_000_000]
-        )
-        let replay = try engine.replay(events: [cheap, pricey], links: [])
-        let pos = try XCTUnwrap(replay.deemedPositions.first)
-        XCTAssertTrue(pos.reason.hasPrefix("mixed"), "한 lot 은 시가, 한 lot 은 실제원가 → mixed (실제: \(pos.reason))")
-        XCTAssertEqual(pos.lotCount, 2)
-    }
 
     // MARK: G7 — 코인으로 낸 수수료는 환율을 요구하지 않는다 (장부 원가를 쓴다)
 
@@ -383,12 +360,11 @@ final class PolicySingleSourceTests: XCTestCase {
             XCTAssertEqual(env.policies.id, "cointax-v2.0")
         }
 
-        // 설정만 바꿔도 양쪽이 함께 따라와야 한다 (예전에는 파이프라인만 바뀌었다)
-        try withDeemedMode(.perLot) {
-            XCTAssertEqual(env.policies.deemed.mode, .perLot, "화면이 보는 정책")
-            XCTAssertEqual(env.pipeline.effectivePolicies.deemed.mode, .perLot, "계산이 쓰는 정책")
-            XCTAssertEqual(env.policies.id, env.pipeline.effectivePolicies.id)
-        }
+        // 화면과 계산이 **같은 정책 하나**를 봐야 한다 (예전에는 파이프라인만 바뀌는 결함이 있었다).
+        // 의제 방식은 이제 고를 수 없지만(§88① · Q1), 「진실 원천이 하나인가」는 그대로 확인한다.
+        XCTAssertEqual(env.policies.id, env.pipeline.effectivePolicies.id)
+        XCTAssertEqual(env.policies.costMethodResolver.id, env.pipeline.effectivePolicies.costMethodResolver.id)
+        XCTAssertEqual(env.policies.rounding.id, env.pipeline.effectivePolicies.rounding.id)
     }
 
     /// 기본값이 아닌 정책은 번들 id 로 구분되어야 한다 (감사 추적)
@@ -396,11 +372,10 @@ final class PolicySingleSourceTests: XCTestCase {
         try withDeemedMode(.positionAverage) {
             XCTAssertEqual(PolicyBundle.current.id, "cointax-v2.0", "기본값은 id 를 바꾸지 않는다")
         }
-        try withDeemedMode(.perLot) {
-            XCTAssertEqual(PolicyBundle.current.id, "cointax-v2.0+deemed_perLot")
-            XCTAssertNotEqual(PolicyBundle.current.id, PolicyBundle.v1Default.id,
-                              "과거 스냅샷과 구분되어야 어떤 정책으로 계산했는지 답할 수 있다")
-        }
+        // 고를 수 있는 방식이 하나뿐이라 지금은 id 가 갈리지 않는다.
+        // **정책이 늘어나면 id 가 갈려야 한다**는 규칙 자체는 남는다 — 과거 스냅샷과 구분되어야
+        // 「어떤 정책으로 계산한 숫자인가」에 답할 수 있다 (design/04-policies §1).
+        XCTAssertEqual(PolicyBundle.current.id, PolicyBundle.v1Default.id)
         // v1Default 자체는 잠금값이므로 변하지 않는다
         XCTAssertEqual(PolicyBundle.v1Default.id, "cointax-v2.0")
         XCTAssertEqual(PolicyBundle.v1Default.deemed.mode, .positionAverage)
@@ -408,7 +383,7 @@ final class PolicySingleSourceTests: XCTestCase {
 
     /// 검증기는 요약의 정책 id 와 실제 정책이 일치하는지 본다 — id bump 후에도 통과해야 한다
     func testVerifierAcceptsBumpedBundleID() throws {
-        try withDeemedMode(.perLot) {
+        try withDeemedMode(.positionAverage) {
             let policies = PolicyBundle.current
             let summary = TaxYearSummary(
                 projectID: ProjectID(), taxYear: 2027, status: .draft,

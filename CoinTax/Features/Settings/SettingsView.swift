@@ -271,19 +271,8 @@ struct SettingsView: View {
         Card(
             title: "과세 시작 전 보유분 계산 방식",
             systemImage: "arrow.triangle.branch",
-            footnote: "법령·국세청 안내에 어느 쪽인지 명시가 없습니다. 두 방식 결과를 리포트에 함께 보여줍니다 (세무 확인 TQ-01)."
+            footnote: "소득세법 시행령 제88조제1항이 거주자별 총평균법으로 정해져 있어 고를 여지가 없습니다."
         ) {
-            Picker("", selection: $deemedMode) {
-                ForEach(DeemedBasisMode.allCases) { mode in
-                    Text(mode.label).tag(mode)
-                }
-            }
-            .pickerStyle(.radioGroup)
-            .labelsHidden()
-            .onChange(of: deemedMode) { _, v in
-                DeemedPreferences.basisMode = v
-                env.invalidateCalculation()
-            }
             Text(deemedMode.detail)
                 .font(Theme.caption).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
