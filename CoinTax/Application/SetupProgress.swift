@@ -72,16 +72,26 @@ struct SetupProgress {
         let candidates = env.matchingService.suggest(for: project)
         p.pendingCandidates = candidates.count
         let unmatched = unmatchedTransferCount(project)
+        // 상대 없는 **입금** 중 개인지갑이 덮을 수 있는 것도 남은 일이다.
+        //
+        // 예전에는 출금만 셌다. 그런데 개인지갑에서 되가져온 입금을 연결하지 않으면
+        // **취득가 0원**이 되어 판 금액 전부가 이익으로 잡힌다 — 세금이 커지는 쪽이다.
+        // 앱에 「개인지갑에서」 버튼이 있어 고칠 수 있는데, 체크리스트가 「완료」라고 하면 아무도 안 고친다.
+        let receivable = walletReceivableCount(project, env: env)
+        let leftovers = [
+            unmatched > 0 ? "상대 없는 출금 \(unmatched)건 — 개인지갑으로 보낸 것이면 지정해 두세요 (안 하면 산 값이 사라집니다)" : nil,
+            receivable > 0 ? "개인지갑에서 되가져온 것으로 보이는 입금 \(receivable)건 — 연결하지 않으면 취득가 0원이 되어 세금이 커집니다" : nil
+        ].compactMap { $0 }
         p.steps.append(Step(
             id: 3,
             title: "거래소 간 전송 연결",
             detail: candidates.isEmpty
-                ? (confirmed > 0
-                    ? "\(confirmed)건 연결됨" + (unmatched > 0 ? " · 상대 없는 출금 \(unmatched)건 — 개인지갑으로 보낸 것이면 지정해 두세요 (안 하면 산 값이 사라집니다)" : "")
+                ? (confirmed > 0 || !leftovers.isEmpty
+                    ? ([confirmed > 0 ? "\(confirmed)건 연결됨" : nil].compactMap { $0 } + leftovers).joined(separator: " · ")
                     : "연결할 전송이 없습니다.")
                 : "연결 안 된 후보 \(candidates.count)건이 있습니다. 연결하지 않으면 취득원가가 사라져 세금이 커집니다.",
-            // 상대 없는 출금이 남아 있으면 아직 할 일이 있다 — 조용히 「완료」로 두면 산 값이 사라진 채 계산된다
-            state: (candidates.isEmpty && unmatched == 0) ? .done : .needsAction,
+            // 고칠 수 있는 일이 남아 있으면 「완료」로 두지 않는다 — 조용히 두면 산 값이 사라지거나 0원이 된 채 계산된다
+            state: (candidates.isEmpty && unmatched == 0 && receivable == 0) ? .done : .needsAction,
             section: .matching,
             actionTitle: candidates.isEmpty ? "보기" : "확인"
         ))
@@ -167,14 +177,40 @@ struct SetupProgress {
         if let missing = env.lastCalculation?.replay.missingMarketAssets, !env.calculationStale {
             return missing.map(\.code).filter { !have.contains($0) }.sorted()
         }
+        // 어림잡을 때도 **수량 규칙 한 벌**(`LedgerDelta`)을 쓴다.
+        //
+        // 예전에는 기초자산(`baseAsset`)만 봤다. 그러면 **코인을 팔아서 받은 코인**(코인↔코인 매도의
+        // 견적자산)이 목록에서 빠진다 — 그 코인은 기초자산으로 한 번도 안 나오기 때문이다.
+        // 그래서 체크리스트는 「완료」인데 계산은 그 코인의 시가가 없어 막혔다.
+        // 장부가 실제로 움직이는 자산을 그대로 물어보면 그 갈래가 생기지 않는다 (코인 수수료도 함께 덮인다).
         let cutoff = TaxTime.taxStartDate
-        let candidates = Set(
-            project.events
-                .filter { $0.timestamp < cutoff }
-                .map { AssetSymbol($0.baseAsset).code }
-                .filter { $0 != "KRW" }
-        )
+        let pid = ProjectID(project.id)
+        var candidates: Set<String> = []
+        for entity in project.events where entity.timestamp < cutoff {
+            for change in LedgerDelta.bookChanges(for: EntityMappers.event(entity, projectID: pid)) {
+                candidates.insert(change.asset.code)
+            }
+        }
         return candidates.subtracting(have).sorted()
+    }
+
+    /// 상대 없는 입금 중 **개인지갑이 그 시점에 덮을 수 있는** 건수.
+    /// 「전송 연결」 화면의 「개인지갑에서」 버튼이 뜨는 조건과 같아야 한다 —
+    /// 화면에는 할 일이 보이는데 체크리스트만 「완료」이면 사용자가 그냥 지나친다.
+    private static func walletReceivableCount(_ project: ProjectEntity, env: AppEnvironment) -> Int {
+        let linkedTo = Set(project.links.filter { $0.status == LinkStatus.confirmed.rawValue }.map(\.toEventID))
+        guard let wallet = project.accounts.first(where: { $0.exchangeCode == ExchangeCode.wallet.rawValue }) else {
+            return 0
+        }
+        return project.events.filter { e in
+            guard e.type == EventType.deposit.rawValue,
+                  e.baseAsset.uppercased() != "KRW",
+                  e.accountID != wallet.id,
+                  !linkedTo.contains(e.id) else { return false }
+            let qty = Money.abs(Decimal(string: e.quantity) ?? 0)
+            guard qty > 0 else { return false }
+            return env.matchingService.walletBalance(asset: e.baseAsset, at: e.timestamp, project: project) >= qty
+        }.count
     }
 
     private static func unmatchedTransferCount(_ project: ProjectEntity) -> Int {
