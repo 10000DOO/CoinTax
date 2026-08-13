@@ -266,8 +266,14 @@ struct ImportView: View {
                             .font(Theme.caption).foregroundStyle(.secondary)
                         }
                         Spacer(minLength: 8)
-                        if let excluded = Self.excludedCount(f.metaJSON), excluded > 0 {
-                            Pill(text: "제외 \(excluded)", tone: .warning)
+                        // 「일부러 뺀 행」과 「읽지 못해 버린 행」은 따로 보여준다.
+                        // 뒤엣것은 거래가 통째로 빠졌다는 뜻이라, 가져오기 직후 한 번이 아니라 여기 계속 남아야 한다.
+                        let meta = ImportService.importMeta(f.metaJSON)
+                        if meta.unreadable > 0 {
+                            Pill(text: "못 읽음 \(meta.unreadable)", tone: .danger)
+                        }
+                        if meta.excluded > 0 {
+                            Pill(text: "제외 \(meta.excluded)", tone: .warning)
                         }
                         Pill(text: parserLabel(f.parserID), tone: .neutral)
                         Button("빼기") { pendingDelete = f }
@@ -506,6 +512,15 @@ struct ImportView: View {
                 append("\(name): 어느 거래소 자료인지 알 수 없습니다 — 위에서 거래소를 직접 고른 뒤 다시 넣어 주세요", .warning)
                 return
             }
+            // 손으로 고른 계정과 파일 내용이 다르면 알린다 (넣기는 그대로 넣는다 — 사용자가 고른 것이다)
+            if selectedAccountID != nil,
+               let detected = ImportRouter.mismatch(route: env.importService.route(url: url),
+                                                    chosenExchange: account.exchangeCode) {
+                append(
+                    "\(name): 이 파일은 «\(ImportRouter.displayName(detected))» 자료로 보이는데 «\(account.displayName)» 계정에 넣었습니다 — 원가법이 달라지고 거래소 간 전송이 안 잡힐 수 있습니다. 「자동으로 구분」으로 두는 편이 안전합니다",
+                    .warning
+                )
+            }
 
             // 열 지정·비밀번호 시트는 한 번에 하나만 뜬다. 폴더째 넣을 때 뒤 파일이 앞 파일의
             // 대기 상태를 덮어쓰면 앞 파일이 말없이 빠지므로, 건너뛴 사실을 알린다.
@@ -591,13 +606,6 @@ struct ImportView: View {
     //
     // 사용자가 고른 파일에는 성명·계좌·주소가 들어 있다. 작업용 사본을 임시 폴더에
     // 남겨두면 안 된다 (docs/IMPLEMENTATION.md §9 PII 최소 저장 · 리뷰 4-4).
-
-    private static func excludedCount(_ metaJSON: String) -> Int? {
-        guard let data = metaJSON.data(using: .utf8),
-              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String],
-              let raw = obj["ignoredCount"] else { return nil }
-        return Int(raw)
-    }
 
     private static func stageCopy(of url: URL) throws -> URL {
         let dir = FileManager.default.temporaryDirectory

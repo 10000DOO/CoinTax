@@ -174,6 +174,21 @@ final class ImportService {
         return try persist(result: result, project: project, fileName: fileName, format: probe.format, fileData: Data(text.utf8))
     }
 
+    /// 가져온 파일 기록(`metaJSON`)에 남는 건수.
+    ///
+    /// 두 값은 성격이 전혀 다르다 — 섞어 보여주면 안 된다.
+    /// - `excluded`: **일부러 뺀** 행 (선물·미지원 Type). 정상이다.
+    /// - `unreadable`: **읽지 못해 버린** 행. 그만큼 **거래가 통째로 빠졌다**는 뜻이라
+    ///   가져오기 직후 한 번이 아니라 파일 목록에 계속 보여야 한다.
+    ///   (빗썸 확인서는 표 열이 밀리거나 페이지 경계에 걸리면 그 행을 버린다)
+    static func importMeta(_ metaJSON: String) -> (excluded: Int, unreadable: Int) {
+        guard let data = metaJSON.data(using: .utf8),
+              let obj = try? JSONSerialization.jsonObject(with: data) as? [String: String] else {
+            return (0, 0)
+        }
+        return (Int(obj["ignoredCount"] ?? "") ?? 0, Int(obj["errorCount"] ?? "") ?? 0)
+    }
+
     private func persist(result: ParseResult, project: ProjectEntity, fileName: String, format: SourceFormat, fileData: Data?) throws -> ImportOutcome {
         // 파일 원본 바이트 기준 해시 → 같은 파일 재import 차단 (F-IM-08)
         let sha = fileData.map { Fingerprint.sha256Hex($0) } ?? UUID().uuidString
@@ -208,11 +223,15 @@ final class ImportService {
         let pid = ProjectID(project.id)
         var existingCounts: [String: Int] = [:]
         var existingByKey: [String: LedgerEventEntity] = [:]
+        /// 같은 키로 이미 들어와 있는 **수량들**. 한 거래ID에 여러 행이 붙는 경우
+        /// (배치 출금의 같은 TXID 등)를 오탐하지 않으려면 하나가 아니라 전부와 비교해야 한다.
+        var existingQtysByKey: [String: Set<String>] = [:]
         for entity in project.events {
             let domain = EntityMappers.event(entity, projectID: pid)
             let key = Fingerprint.contentKey(for: domain, parserID: domain.sourceKind)
             existingCounts[key, default: 0] += 1
             if existingByKey[key] == nil { existingByKey[key] = entity }
+            existingQtysByKey[key, default: []].insert(entity.quantity)
         }
 
         var incomingCounts: [String: Int] = [:]
@@ -227,6 +246,21 @@ final class ImportService {
             let key = Fingerprint.contentKey(for: event, parserID: result.parserID)
             incomingCounts[key, default: 0] += 1
             if incomingCounts[key]! <= (existingCounts[key] ?? 0) {
+                // **건너뛰기 전에** 「같은 거래ID인데 수량이 다른가」를 본다.
+                //
+                // 거래ID가 있는 이벤트의 키에는 수량이 안 들어간다. 그래서 같은 주문이
+                // 다른 수량으로 다시 들어와도 여기서 개수만 보고 조용히 넘어갔다 —
+                // 아래에 그 경우를 알리는 코드가 있었지만 **이 줄에 막혀 한 번도 실행되지 않았다.**
+                // 한쪽 파일이 그 주문의 일부만 담고 있다는 뜻이라, 어느 숫자로 신고하는지가 달라진다.
+                if let ext = event.externalID, !ext.isEmpty {
+                    let qty = Money.decimalString(event.quantity)
+                    let priors = existingQtysByKey[key] ?? []
+                    if !priors.isEmpty, !priors.contains(qty) {
+                        dupeWarnings.append(
+                            "같은 거래ID \(ext) 가 다른 수량으로 다시 들어왔습니다 (기존 \(priors.sorted().joined(separator: ", ")) / 신규 \(qty)) — 기존 값을 유지했습니다. 한쪽 파일이 그 주문의 일부만 담고 있을 수 있으니 원본을 확인하세요"
+                        )
+                    }
+                }
                 skipped += 1
                 continue
             }
