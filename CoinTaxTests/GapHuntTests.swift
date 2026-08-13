@@ -380,7 +380,7 @@ final class PolicySingleSourceTests: XCTestCase {
         try withDeemedMode(.positionAverage) {
             XCTAssertEqual(env.policies.deemed.mode, .positionAverage)
             XCTAssertEqual(env.pipeline.effectivePolicies.deemed.mode, .positionAverage)
-            XCTAssertEqual(env.policies.id, "cointax-v1.2")
+            XCTAssertEqual(env.policies.id, "cointax-v2.0")
         }
 
         // 설정만 바꿔도 양쪽이 함께 따라와야 한다 (예전에는 파이프라인만 바뀌었다)
@@ -394,15 +394,15 @@ final class PolicySingleSourceTests: XCTestCase {
     /// 기본값이 아닌 정책은 번들 id 로 구분되어야 한다 (감사 추적)
     func testNonDefaultPolicyBumpsBundleID() throws {
         try withDeemedMode(.positionAverage) {
-            XCTAssertEqual(PolicyBundle.current.id, "cointax-v1.2", "기본값은 id 를 바꾸지 않는다")
+            XCTAssertEqual(PolicyBundle.current.id, "cointax-v2.0", "기본값은 id 를 바꾸지 않는다")
         }
         try withDeemedMode(.perLot) {
-            XCTAssertEqual(PolicyBundle.current.id, "cointax-v1.2+deemed_perLot")
+            XCTAssertEqual(PolicyBundle.current.id, "cointax-v2.0+deemed_perLot")
             XCTAssertNotEqual(PolicyBundle.current.id, PolicyBundle.v1Default.id,
                               "과거 스냅샷과 구분되어야 어떤 정책으로 계산했는지 답할 수 있다")
         }
         // v1Default 자체는 잠금값이므로 변하지 않는다
-        XCTAssertEqual(PolicyBundle.v1Default.id, "cointax-v1.2")
+        XCTAssertEqual(PolicyBundle.v1Default.id, "cointax-v2.0")
         XCTAssertEqual(PolicyBundle.v1Default.deemed.mode, .positionAverage)
     }
 

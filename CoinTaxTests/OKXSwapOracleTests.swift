@@ -87,14 +87,19 @@ final class OKXSwapOracleTests: XCTestCase {
         let dem = try XCTUnwrap(replay.deemedPositions.first)
         XCTAssertEqual(dem.asset.code, "USDT")
         XCTAssertEqual(dem.quantity, 100_000)
-        XCTAssertEqual(dem.deemedUnitKRW, 1_400, "max(장부 1,300 · 시가 1,400)")
+        XCTAssertEqual(dem.deemedUnitKRW, 1_400, "max(장부 1,300 · 시가 1,400) — 의제 재기동 시점의 단가는 그대로다")
         XCTAssertEqual(dem.totalDeemedKRW, 140_000_000)
 
         // 처분 두 건 — USDT leg 과 BTC
+        //
+        // **의제 단가(1,400)와 처분 원가 단가(1,437.5)는 다르다.** `[영]` §88① 의 총평균법은
+        // 그 해 「기초 + 당기취득」을 통째로 평균한다 — 2027 년에 BTC 를 팔아 받은 USDT 60,000
+        // (90,000,000 원)이 분자·분모에 함께 들어가 단가를 올린다. 재기동 직후 단가로 파는
+        // 이동평균법과 갈리는 지점이다 (백서 4.4 예시 B).
         let usdtLeg = try XCTUnwrap(replay.disposals.first { $0.asset.code == "USDT" })
         XCTAssertEqual(usdtLeg.proceedsKRW, 72_500_000, "50,000 × 1,450")
-        XCTAssertEqual(usdtLeg.costKRW, 70_000_000, "50,000 × 1,400 (의제 단가)")
-        XCTAssertEqual(usdtLeg.pnlKRW, 2_500_000)
+        XCTAssertEqual(usdtLeg.costKRW, 71_875_000, "50,000 × 1,437.5 — 그 해 총평균단가 (140,000,000+90,000,000)÷(100,000+60,000)")
+        XCTAssertEqual(usdtLeg.pnlKRW, 625_000, "72,500,000 − 71,875,000")
 
         let btcLeg = try XCTUnwrap(replay.disposals.first { $0.asset.code == "BTC" })
         XCTAssertEqual(btcLeg.costKRW, 72_500_000, "USDT 로 산 BTC 의 취득원가는 그 시점 원화가액")
@@ -111,11 +116,11 @@ final class OKXSwapOracleTests: XCTestCase {
             extraDeductible: 0, abandonedTransferCostKRW: replay.abandonedByYear[2027] ?? 0,
             deemed: replay.deemedPositions, policies: .v1Default
         )
-        XCTAssertEqual(summary.netIncomeKRW, 20_000_000)
-        XCTAssertEqual(summary.taxBaseKRW, 17_500_000)
-        XCTAssertEqual(summary.nationalTaxKRW, 3_500_000)
-        XCTAssertEqual(summary.localTaxKRW, 350_000)
-        XCTAssertEqual(summary.totalTaxKRW, 3_850_000, "03-tax-rules §2.3 표시 예시와 같은 자릿수")
+        XCTAssertEqual(summary.netIncomeKRW, 18_125_000, "625,000 + 17,500,000")
+        XCTAssertEqual(summary.taxBaseKRW, 15_625_000, "18,125,000 − 250만")
+        XCTAssertEqual(summary.nationalTaxKRW, 3_125_000, "15,625,000 × 20%")
+        XCTAssertEqual(summary.localTaxKRW, 312_500, "15,625,000 × 2%")
+        XCTAssertEqual(summary.totalTaxKRW, 3_437_500, "3,125,000 + 312,500")
 
         let report = Verifier.verify(VerifierInput(
             summary: summary, replay: replay, policies: .v1Default,

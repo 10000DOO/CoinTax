@@ -74,14 +74,14 @@ final class SyntheticProjectSmokeTests: XCTestCase {
         fx.autoFetchEnabled = false
         pipeline.fxService = fx
         let result = try await pipeline.calculate(project: project, taxYear: 2027)
-        XCTAssertEqual(result.summary.policyBundleID, "cointax-v1.2")
+        XCTAssertEqual(result.summary.policyBundleID, "cointax-v2.0")
         XCTAssertEqual(result.summary.disclaimers.count, 4)
         XCTAssertEqual(result.replay.disposals.count, 1)
         // force verification pass for export shape check
         var summary = result.summary
         summary.verification = VerificationReport(runID: UUID(), status: "passed", issues: [], calculatedAt: Date())
         let csv = try ReportCSVExporter.exportCSV(summary)
-        XCTAssertTrue(csv.contains("cointax-v1.2"))
+        XCTAssertTrue(csv.contains("cointax-v2.0"))
         let pdf = try ReportPDFExporter.exportPDF(summary)
         XCTAssertGreaterThan(pdf.count, 100)
     }

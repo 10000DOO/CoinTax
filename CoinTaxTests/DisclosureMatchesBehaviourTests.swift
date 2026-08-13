@@ -90,24 +90,31 @@ final class DisclosureMatchesBehaviourTests: XCTestCase {
     /// 잠긴 고지라 정책 id 도 `v1.2` 로 올렸다.
     func testCostMethodDisclosureCoversEveryAccountType() {
         let pid = ProjectID()
-        let resolver = VASPMAElseFIFOResolver()
+        // 원가법의 진실 원천은 정책 번들이다 — 옛 구현체를 직접 만들면 정책 교체가 검증에서 빠진다
+        let resolver = PolicyBundle.v1Default.costMethodResolver
         var uncovered: [String] = []
+        // `[영]` 소득세법 시행령 §88① 은 **계정을 구분하지 않는다** — 거주자별 총평균법 하나다.
+        // 그래서 「어느 계정이 어떤 방법」이라는 옛 전제 자체가 사라졌다.
+        // 대신 **모든 계정이 같은 방법으로 계산되는지**를 본다.
         for code in [ExchangeCode.bithumb, .binance, .okx, .generic, .wallet] {
             let acc = Account.defaults(for: code, projectID: pid)
-            let method = resolver.method(for: acc)
-            // 이름이 직접 적혀 있거나, 「그 밖의 계정」 같은 포괄 표현으로 덮여야 한다
-            let named = TaxCopy.costMethods.contains(acc.displayName)
-            let coveredByCatchAll = method == .fifo && TaxCopy.costMethods.contains("그 밖의 계정")
-            if !named && !coveredByCatchAll { uncovered.append(acc.displayName) }
+            XCTAssertEqual(
+                resolver.method(for: acc), .totalAverage,
+                "\(acc.displayName): 계정에 따라 원가법이 갈리면 §88① 과 다르다"
+            )
         }
-        XCTAssertTrue(uncovered.isEmpty, "원가법 고지가 안 덮는 계정: \(uncovered.joined(separator: ", "))")
-        XCTAssertTrue(TaxCopy.costMethods.contains("개인지갑"), "개인지갑은 이름을 직접 적어 둔다")
-        XCTAssertTrue(TaxCopy.costMethods.contains("이동평균법") && TaxCopy.costMethods.contains("선입선출법"))
+        XCTAssertTrue(uncovered.isEmpty)
+        // 고지가 「사람 단위」와 「연말 확정」을 둘 다 말해야 한다 — 이 둘이 옛 규정과 갈리는 지점이다
+        XCTAssertTrue(TaxCopy.costMethods.contains("총평균법"))
+        XCTAssertTrue(TaxCopy.costMethods.contains("한 사람 단위"))
+        XCTAssertTrue(TaxCopy.costMethods.contains("그 해가 끝나야"))
+        XCTAssertFalse(TaxCopy.costMethods.contains("이동평균법"), "폐지된 옛 규정을 안내하면 안 된다")
+        XCTAssertFalse(TaxCopy.costMethods.contains("선입선출법"), "폐지된 옛 규정을 안내하면 안 된다")
     }
 
     /// 잠긴 고지를 바꾸면 **정책 id 도 함께 올라가야** 과거 계산과 구분된다
     func testPolicyIDMovedWithTheDisclosure() {
-        XCTAssertEqual(PolicyBundle.v1Default.id, "cointax-v1.2")
+        XCTAssertEqual(PolicyBundle.v1Default.id, "cointax-v2.0")
         XCTAssertEqual(PolicyBundle.v1Default.disclaimers.count, 4)
         XCTAssertTrue(PolicyBundle.v1Default.disclaimers.contains(TaxCopy.costMethods))
     }

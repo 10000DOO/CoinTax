@@ -46,6 +46,8 @@ final class ResidentCostPool {
     private(set) var closings: [String: [Int: Position]] = [:]
     /// 가진 것보다 많이 내보낸 해의 **원가 배분 비율**. 없는 원가를 공제할 수는 없다.
     private var outflowScales: [String: [Int: Decimal]] = [:]
+    /// 그 해 「기초 + 당기취득」 총량·총원가. 원가를 나눠 줄 때 **나눗셈을 마지막에** 하려고 들고 있는다
+    private var yearTotals: [String: [Int: Position]] = [:]
     /// 정산 중 발견한 문제 (수량이 모자라 기말이 음수가 되는 경우 등)
     private(set) var settleWarnings: [(asset: String, year: Int, shortQty: Decimal)] = []
 
@@ -113,6 +115,7 @@ final class ResidentCostPool {
                 // §92②4 — 「기초 + 당기취득」의 총액을 총수량으로 나눈 평균단가
                 let unit: Decimal = Money.isApproxZero(totalQty) ? 0 : totalCost / totalQty
                 unitCosts[asset, default: [:]][year] = unit
+                yearTotals[asset, default: [:]][year] = Position(qty: totalQty, cost: totalCost)
 
                 // 나간 수량이 가진 것보다 많으면(자료 누락) **가진 원가만큼만** 배분한다.
                 // 자르지 않으면 처분 원가 합이 취득 원가 합을 넘어 원가가 새어 나간다.
@@ -155,16 +158,23 @@ final class ResidentCostPool {
 
     /// 처분 수량에 대응하는 필요경비(취득가액). 정산되지 않았으면 nil —
     /// **0 을 돌려주면 안 된다.** 원가 0 은 전액이 이익이라는 뜻이라 세액이 크게 부풀려진다.
+    ///
+    /// 단가를 먼저 만들어 되곱하지 않는다. 18자리 수량(wei 단위 ETH 등)에서는
+    /// 총원가 ÷ 수량이 무한소수가 되어 되곱해도 원래 값으로 돌아오지 않는다 —
+    /// 전량을 팔았는데 소득이 1원 어긋난다. **곱셈을 먼저 하고 나눗셈을 마지막에** 한다.
     func costOfDisposal(asset: String, year: Int, qty: Decimal) -> Decimal? {
-        guard let unit = unitCost(asset: asset, year: year) else { return nil }
-        return unit * qty * (outflowScales[asset]?[year] ?? 1)
+        guard unitCost(asset: asset, year: year) != nil else { return nil }
+        guard let total = yearTotals[asset]?[year], !Money.isApproxZero(total.qty) else { return 0 }
+        let scale = outflowScales[asset]?[year] ?? 1
+        // 그 해 가진 것을 통째로 내보내는 처분이면 **나눗셈 없이** 남은 원가를 그대로 준다
+        if scale == 1, Money.isApproxZero(qty - total.qty) { return total.cost }
+        return total.cost * qty * scale / total.qty
     }
 
     /// 그 해 소실분의 원가 합계 (회수되지 않는 몫). 정산 전이면 0.
     func abandonedCost(asset: String, year: Int) -> Decimal {
-        guard let unit = unitCost(asset: asset, year: year),
-              let qty = flows[asset]?[year]?.abandonedQty else { return 0 }
-        return unit * qty * (outflowScales[asset]?[year] ?? 1)
+        guard let qty = flows[asset]?[year]?.abandonedQty else { return 0 }
+        return costOfDisposal(asset: asset, year: year, qty: qty) ?? 0
     }
 
     /// 연도별 소실 원가 합계 (모든 자산)
@@ -176,8 +186,7 @@ final class ResidentCostPool {
             guard let byYear = flows[asset] else { continue }
             for year in byYear.keys.sorted() {
                 guard let flow = byYear[year], flow.abandonedQty > 0 else { continue }
-                guard let unit = unitCosts[asset]?[year] else { continue }
-                out[year, default: 0] += unit * flow.abandonedQty * (outflowScales[asset]?[year] ?? 1)
+                out[year, default: 0] += abandonedCost(asset: asset, year: year)
             }
         }
         return out

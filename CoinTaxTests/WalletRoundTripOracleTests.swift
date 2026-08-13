@@ -182,6 +182,8 @@ final class WalletRoundTripOracleTests: XCTestCase {
         XCTAssertEqual(summary.totalCostsKRW, 80_000_000)
         XCTAssertEqual(summary.netIncomeKRW, 95_000_000, "개인지갑을 안 쓰면 소득이 5,000만 늘어난다")
         XCTAssertEqual(summary.totalTaxKRW, 20_350_000)
-        XCTAssertEqual(replay.abandonedTotal, 50_000_000, "빗썸에서 나간 1 BTC 의 취득원가가 소멸한다")
+        // 소멸 원가도 **거주자 평균 단가**로 잡힌다 (`[영]` §88①). 예전에는 빗썸 계정 장부의
+        // 단가(5,000만)를 썼다. 세액은 그대로다 — 소멸 원가는 필요경비가 아니라 사라지는 몫이다.
+        XCTAssertEqual(replay.abandonedTotal, 60_000_000, "빗썸에서 나간 1 BTC 의 취득원가가 거주자 평균 단가로 소멸한다")
     }
 }

@@ -274,7 +274,7 @@ final class AuditProbe2Tests: XCTestCase {
 
     func testProbe_exportLockedWhenCritical() throws {
         var s = TaxYearSummary(
-            projectID: ProjectID(), taxYear: 2027, status: .blocked, policyBundleID: "cointax-v1.2",
+            projectID: ProjectID(), taxYear: 2027, status: .blocked, policyBundleID: "cointax-v2.0",
             totalProceedsKRW: 0, totalCostsKRW: 0, netIncomeKRW: 0, basicDeductionKRW: 2_500_000,
             taxBaseKRW: 0, nationalTaxKRW: 0, localTaxKRW: 0, totalTaxKRW: 0,
             abandonedTransferCostKRW: 0, disposals: [], deemed: [],
@@ -291,7 +291,7 @@ final class AuditProbe2Tests: XCTestCase {
     /// 고지 4종·주의사항·세무확인 항목이 PDF 에 전부 실려야 한다
     func testProbe_pdfContainsAllRequiredNotices() throws {
         var s = TaxYearSummary(
-            projectID: ProjectID(), taxYear: 2027, status: .draft, policyBundleID: "cointax-v1.2",
+            projectID: ProjectID(), taxYear: 2027, status: .draft, policyBundleID: "cointax-v2.0",
             totalProceedsKRW: 1_000, totalCostsKRW: 500, netIncomeKRW: 500, basicDeductionKRW: 2_500_000,
             taxBaseKRW: 0, nationalTaxKRW: 0, localTaxKRW: 0, totalTaxKRW: 0,
             abandonedTransferCostKRW: 0, disposals: [], deemed: [],
