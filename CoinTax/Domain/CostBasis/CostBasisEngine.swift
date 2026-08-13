@@ -49,6 +49,8 @@ struct CostBasisEngine {
         var cryptoFeeOfDisposal: [UUID: (asset: String, qty: Decimal)] = [:]
         /// 재고가 모자라 **일부만 처분된** 건의 실제 수량. 없으면 기록 수량 그대로다
         var effectiveQtyOfDisposal: [UUID: Decimal] = [:]
+        /// 전송 상세를 정산 후 다시 채우기 위한 (자산, 연도, 나간 수량, 소실 수량)
+        var transferQtyByLink: [UUID: (asset: String, year: Int, principalQty: Decimal, wQty: Decimal, rQty: Decimal, feeQty: Decimal)] = [:]
         func yearOf(_ e: LedgerEvent) -> Int { TaxTime.calendarYearKST(e.timestamp) }
 
         // id 는 저장소에서 유일하지만, 방어적으로 첫 값을 채택한다 (중복 키로 프로세스가 죽지 않게)
@@ -566,6 +568,11 @@ struct CostBasisEngine {
                         } else {
                             pendingArrivals[link.toEventID] = (qty: rQty, cost: result.transferredCostKRW)
                         }
+                        transferQtyByLink[link.id.raw] = (
+                            asset: e.baseAsset.code, year: yearOf(e),
+                            principalQty: wQty - out.shortfallQty, wQty: wQty,
+                            rQty: rQty, feeQty: explicitFeeQty
+                        )
                         transferDetails.append(TransferCostDetail(
                             linkID: link.id,
                             outboundCostKRW: out.costKRW,
@@ -788,6 +795,26 @@ struct CostBasisEngine {
             disposals[i].feesKRW = fees
             disposals[i].pnlKRW = d.proceedsKRW - cost - fees
             disposals[i].method = .totalAverage
+        }
+
+        // --- 전송 상세도 풀 단가 기준으로 ---
+        // 재생 중에 넣은 값은 계정 장부 원가라 총평균법과 다르다. 안 고치면 리포트의
+        // 「전송 소실 원가」가 합계와 어긋난다.
+        // **같은 정책을 다시 태운다.** 여기서 비율을 직접 계산하면 검증기(V-COST-02)가 보는
+        // 「이전 원가 = 나간 원가 × 도착비율」 규칙과 어긋난다 — 정상 계산이 Critical 로 막힌다.
+        for i in transferDetails.indices {
+            guard let q = transferQtyByLink[transferDetails[i].linkID.raw],
+                  let unit = pool.unitCost(asset: q.asset, year: q.year) else { continue }
+            let result = policies.transferCost.apply(
+                outboundCostKRW: unit * q.principalQty,
+                withdrawnQty: q.wQty,
+                receivedQty: q.rQty,
+                explicitFeeCostKRW: unit * q.feeQty
+            )
+            transferDetails[i].outboundCostKRW = unit * q.principalQty
+            transferDetails[i].transferredCostKRW = result.transferredCostKRW
+            transferDetails[i].abandonedCostKRW = result.abandonedCostKRW
+            transferDetails[i].deductibleExpenseKRW = result.deductibleExpenseKRW
         }
 
         // --- 소실 원가도 풀 단가 기준으로 ---
