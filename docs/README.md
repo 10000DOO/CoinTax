@@ -43,6 +43,7 @@
 | [realdata-audit-2026-08-12.md](./realdata-audit-2026-08-12.md) | 1차 — 파서(CRLF·BOM·타임존·PDF 좌표)·코인↔코인 견적 leg |
 | [audit-2026-08-12-logic.md](./audit-2026-08-12-logic.md) | 2차 — 코인 수수료 장부 반영·전송 도착 시각·검증기 오탐·**거래소 자동 구분** |
 | [audit-2026-08-12-verification.md](./audit-2026-08-12-verification.md) | 3차 — **2027 과세 경로 실데이터 검증** · 바이낸스 외부 정답지 · 리포트/export · 수수료 자산 넘겨짚기 |
+| [audit-2026-08-13-report-and-rules.md](./audit-2026-08-13-report-and-rules.md) | 4차 — **1원 미만 단가가 export 에서 0원** · 출금 수수료의 마지막 넘겨짚기 · 무작위 생성기 확대 |
 
 ### B. 설계 (큰 틀 → 세부)
 
@@ -75,7 +76,7 @@
 ## 실행하기 전에 (개발자)
 
 ```bash
-./scripts/smoke.sh                              # PII 검사 + 빌드 + 테스트 (200건)
+./scripts/smoke.sh                              # PII 검사 + 빌드 + 테스트 (242건)
 python3 scripts/binance-expected-balances.py    # 바이낸스 잔고 정답지 재생성 (실원본 필요)
 ```
 

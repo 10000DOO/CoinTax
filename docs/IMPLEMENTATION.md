@@ -66,7 +66,7 @@
 | 환율 되짚기 | `FXHolidayPolicy` **한 곳에서만**. 원격 클라이언트는 고시 있는 날짜만 반환 |
 | 파일 중복 | 원본 바이트 SHA-256 일치 시 import 거부 (`E_DUPLICATE_FILE`) |
 | 총수입금액 | **총액 기준 통일**. 매도 수수료는 필요경비. 빗썸은 「거래금액」을 양도가액, (거래금액 − 정산금액)을 수수료로 분리 (세무 확인 대기 TQ-02) |
-| 세무 확인 항목 | `TaxOpenQuestions` 18건을 「세무 확인」 화면·CSV·PDF에 **항상 노출**. 가정을 코드에만 두지 않는다 |
+| 세무 확인 항목 | `TaxOpenQuestions` 19건을 「세무 확인」 화면·CSV·PDF에 **항상 노출**. 가정을 코드에만 두지 않는다 |
 
 ### 2.1 필수 고지 문자열
 
@@ -249,7 +249,7 @@ deductibleExpense = 0
 - [x] Critical verify 시 export 버튼 disabled  
 - [x] 적용 환율 출처(휴일 대체 시 실제 고시일)를 리포트·export에 표시  
 
-> 체크 갱신: 2026-08-12 (CoinTaxTests **225 pass**, 경고 0).
+> 체크 갱신: 2026-08-13 (CoinTaxTests **242 pass**, 경고 0).
 
 ---
 
