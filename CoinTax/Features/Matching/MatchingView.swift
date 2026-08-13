@@ -233,7 +233,7 @@ struct MatchingView: View {
             if outgoing {
                 Button("개인지갑으로") { moveToWallet(e) }
                     .buttonStyle(.bordered).controlSize(.small)
-                    .help("거래소 밖 내 지갑으로 보낸 것으로 처리합니다. 산 값이 지갑으로 이어지고, 전송 자체는 세금이 붙지 않습니다")
+                    .help("거래소 밖 내 지갑으로 보낸 것으로 처리합니다. 산 값이 지갑으로 이어지고, 전송 자체는 세금이 붙지 않습니다. 네트워크 수수료는 원본에 없어 반영하지 못하므로 보유 현황에 그만큼 남아 보일 수 있습니다 (세액은 달라지지 않습니다)")
                 Button("잘못 보냄") { markLost(e) }
                     .buttonStyle(.bordered).controlSize(.small)
                     .help("주소나 네트워크를 틀려서 되돌릴 수 없게 된 출금으로 표시합니다. 산 값은 사라지고 손실 공제도 안 됩니다 — 세액은 지금과 같고, 확인했다는 표시만 남습니다")

@@ -53,6 +53,18 @@ enum ImportRouter {
         )
     }
 
+    /// 손으로 고른 계정과 **파일 내용**이 어긋나는가. 어긋나면 파일이 가리키는 거래소를 돌려준다.
+    ///
+    /// 사용자가 거래소를 직접 고르면 앱은 그대로 따른다 — 그게 맞다. 다만 앱은 바로 직전에
+    /// 파일 내용으로 어느 거래소 것인지 **이미 알고 있으면서** 아무 말도 하지 않았다.
+    /// 잘못 들어가면 원가법이 바뀌고(빗썸=이동평균 vs 해외=선입선출) 거래소 간 전송이 안 잡혀
+    /// **세금이 달라지는데**, 잔고 대조는 (계정, 원본 종류)별로 보므로 그래도 통과한다 — 아무도 못 잡는다.
+    static func mismatch(route: Route, chosenExchange: String?) -> ExchangeCode? {
+        guard let chosen = chosenExchange, route.isConfident,
+              let detected = route.exchange, detected.rawValue != chosen else { return nil }
+        return detected
+    }
+
     /// 사용자에게 보여줄 거래소 이름
     static func displayName(_ code: ExchangeCode) -> String {
         switch code {
