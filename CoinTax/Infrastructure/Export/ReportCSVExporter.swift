@@ -91,6 +91,13 @@ enum ReportCSVExporter {
         for n in TaxCopy.notices {
             rows.append(["notice", "text", n, "", ""])
         }
+        // 신고 안내 — 화면·PDF 와 같은 문구를 같은 순서로
+        if summary.taxYear >= TaxTime.taxStartYear {
+            for (i, g) in TaxCopy.filingGuide.enumerated() {
+                rows.append(["filing", "guide\(i + 1)", g, "", ""])
+            }
+        }
+
         // 세무 확인 대기 항목 — 신고 전에 반드시 다시 볼 것
         for q in TaxOpenQuestions.all {
             rows.append([

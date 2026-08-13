@@ -53,7 +53,36 @@ enum TaxCopy {
     static let unmatchedWithdrawalCost =
         "연결되지 않은 출금의 취득원가는 소멸 처리됩니다(세액이 커지는 방향). 상대 입금을 연결하거나, 개인지갑으로 보낸 것이면 「전송 연결」 화면에서 개인지갑으로 지정하면 원가가 이어집니다."
 
+    // MARK: - 신고 안내 (계산이 끝난 뒤 무엇을 해야 하는가)
+
+    /// `[법]` 소득세법 §73①8 — 분리과세기타소득만 있는 자의 확정신고 의무를 면제하면서
+    /// 괄호로 "제127조에 따라 원천징수되지 아니하는 소득은 제외한다"고 못박는다.
+    /// 가상자산소득은 §127①6다 로 원천징수가 없으므로 **이 면제에서 빠진다.**
+    /// 세액 0원과 신고의무 면제는 다른 문제다 (백서 4.3 · U-23).
+    static let filingRequiredEvenIfZero =
+        "세금이 0원이어도 신고 대상입니다. 소득세법은 「따로 떼어 계산하는 소득만 있는 사람」의 신고 의무를 면제하면서 미리 떼어가지 않는 소득은 빼 두었는데, 코인 소득이 정확히 여기에 해당합니다(제73조제1항제8호). 손실이거나 250만 원 이하일 때 신고서를 꼭 내야 하는지는 조문이 딱 잘라 말하지 않습니다 — 0원이라고 안 내도 된다는 근거도 없습니다."
+
+    /// `[법]` 지방세법 §95① 은 종합소득·퇴직소득 확정신고만 규정한다. 가상자산소득은
+    /// 종합소득에 합산되지 않아 신고 경로가 명문으로 이어져 있지 않다 (백서 U-20).
+    /// 실무는 홈택스 → 위택스 연계다.
+    static let localTaxSeparateFiling =
+        "지방소득세는 국세와 **따로** 냅니다. 2020년부터 개인지방소득세가 분리되어, 국세는 홈택스, 지방소득세는 위택스(또는 시·군·구청)에 신고·납부합니다. 홈택스에서 종합소득세 신고를 마치면 접수증 화면에서 위택스로 이어지는 연계가 있습니다. 22%를 한 번에 내는 것이 아닙니다."
+
+    /// `[법]` 소득세법 §70① — 다음 해 5월 1일~31일
+    static let filingWindow =
+        "신고는 소득이 생긴 다음 해 5월 1일부터 31일까지입니다. 2027년 거래분은 2028년 5월에 홈택스에서 신고합니다."
+
+    /// `[법]` §21①27 은 "양도하거나 **대여**함으로써 발생하는 소득"이라고 한다.
+    /// 대여 소득의 수입금액·수입시기·필요경비를 정한 시행령 규정이 없다 (백서 U-06).
+    static let lendingNotIncluded =
+        "거래소 Earn·스테이킹·렌딩으로 받은 수익은 이 계산에 들어가 있지 않습니다. 법에는 「양도하거나 대여함으로써 발생하는 소득」이 과세 대상이라고 되어 있지만(소득세법 제21조제1항제27호), 대여 소득을 어떻게 계산하는지 정한 규정이 아직 없습니다. 2026년 10월 국세청 기준이 나오면 세금이 늘어나는 방향으로 바뀔 수 있습니다."
+
+    /// 계산이 끝난 뒤 화면·리포트에 함께 붙이는 안내 (순서 고정)
+    static var filingGuide: [String] {
+        [filingWindow, localTaxSeparateFiling, filingRequiredEvenIfZero, lendingNotIncluded]
+    }
+
     static var notices: [String] {
-        [zeroCostAcquisition, lossNotCarriedForward, scheduleMayChange, unmatchedWithdrawalCost]
+        [zeroCostAcquisition, lossNotCarriedForward, scheduleMayChange, unmatchedWithdrawalCost, lendingNotIncluded]
     }
 }

@@ -60,6 +60,7 @@ struct ReportView: View {
             // 연도만 바꾸고 다시 계산하지 않으면 다른 해 세액이 이 해 제목 아래 그대로 남는다.
             if let c = env.lastCalculation, c.covers(taxYear: taxYear) {
                 taxFlowCard(c)
+                if !isPreviewYear { filingCard(c) }
                 verificationCard(c)
                 if !c.summary.disposals.isEmpty { assetBreakdownCard(c) }
                 // 의제취득가는 2027 이후 처분에만 쓰인다 — 예상 연도에서는 볼 이유가 없다
@@ -92,6 +93,13 @@ struct ReportView: View {
                     Text(isPreviewYear ? "27년 규정 적용 시 세액" : "예상 납부 세액")
                         .font(Theme.caption).foregroundStyle(.secondary)
                     Text(Fmt.krwString(s.totalTaxKRW)).font(Theme.heroNumber)
+                    // **0원과 「신고 안 해도 됨」은 다른 말이다.** 여기서 침묵하면
+                    // 손실이거나 250만 원 이하인 이용자가 신고를 건너뛴다 (`[법]` §73①8 · 백서 U-23).
+                    if !isPreviewYear, s.totalTaxKRW == 0 {
+                        Text("세금은 0원이지만 신고 대상입니다")
+                            .font(Theme.caption.weight(.semibold))
+                            .foregroundStyle(Theme.warning)
+                    }
                 }
                 Spacer()
                 statusPill(c)
@@ -358,6 +366,19 @@ struct ReportView: View {
             if c.summary.fxSources.count > 12 {
                 Text("외 \(c.summary.fxSources.count - 12)일").font(Theme.caption).foregroundStyle(.secondary)
             }
+        }
+    }
+
+    // MARK: 신고 안내 — 계산이 끝난 뒤 무엇을 해야 하는가
+
+    private func filingCard(_ c: CalculationResult) -> some View {
+        Card(title: "이 숫자를 어디에 어떻게 내나요", systemImage: "paperplane") {
+            ForEach(Array(TaxCopy.filingGuide.enumerated()), id: \.offset) { _, g in
+                bullet(g, tone: .neutral)
+            }
+            Divider()
+            Row(label: "홈택스에 낼 국세", value: Fmt.krwString(c.summary.nationalTaxKRW))
+            Row(label: "위택스에 낼 지방소득세", value: Fmt.krwString(c.summary.localTaxKRW))
         }
     }
 

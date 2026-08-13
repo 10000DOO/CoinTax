@@ -152,6 +152,15 @@ enum ReportPDFExporter {
             }
         }
         lines.append("")
+        // 화면과 파일이 다른 말을 하면 안 된다 — 신고 안내를 같은 순서로 싣는다
+        if s.taxYear >= TaxTime.taxStartYear {
+            lines.append("")
+            lines.append("이 숫자를 어디에 어떻게 내나요")
+            lines.append("  홈택스에 낼 국세: \(Money.decimalString(Money.roundKRW(s.nationalTaxKRW)))원")
+            lines.append("  위택스에 낼 지방소득세: \(Money.decimalString(Money.roundKRW(s.localTaxKRW)))원")
+            for g in TaxCopy.filingGuide { lines.append("  · \(g)") }
+        }
+        lines.append("")
         lines.append("세무 확인이 필요한 항목 (신고 전 반드시 확인)")
         for q in TaxOpenQuestions.all {
             for chunk in wrapped("- [\(q.id)/\(q.kind.label)] \(q.title)") {
