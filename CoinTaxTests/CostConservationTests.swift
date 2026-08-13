@@ -289,4 +289,37 @@ final class CostConservationTests: XCTestCase {
         let broken = conservationGap(s, r)
         XCTAssertGreaterThan(Money.abs(broken.inflow - broken.outflow), 100, "원가를 깎았는데 법칙이 못 잡았다")
     }
+
+    /// **2027 이후 거래가 한 건도 없어도** 의제취득가가 보유 스냅샷에 반영돼야 한다.
+    ///
+    /// 정산 연도를 「거래가 있는 해」로만 잡으면 2027 을 건너뛰어, 재기동해 둔 취득가를
+    /// 아무도 읽지 않는다 (5차 감사 — 무작위 시드 116·127 에서 원가가 통째로 증발했다).
+    /// 지금은 모든 이용자의 자료가 2026 이전이라 **이 경우가 기본**이다.
+    func testDeemedSurvivesWhenNoPostTaxStartEvents() throws {
+        let pid = ProjectID()
+        let acc = Account.defaults(for: .wallet, projectID: pid)
+        // 2026 년에 1 BTC 를 5천만원에 사고, 그 뒤로 아무 거래도 없다
+        let buy = LedgerEvent(
+            projectID: pid, accountID: acc.id,
+            timestamp: TaxTime.dateKST(year: 2026, month: 6, day: 1),
+            type: .buy, baseAsset: AssetSymbol("BTC"), quoteAsset: AssetSymbol("KRW"),
+            quantity: 1, quoteAmountKRW: 50_000_000, sourceKind: "t", rawRef: "a1"
+        )
+        // 2027-01-01 0시 시가가 1억이면 의제취득가는 max(5천만, 1억) = 1억
+        let r = try CostBasisEngine(
+            policies: .v1Default,
+            accountsByID: [acc.id: acc],
+            fxRates: [:], marketPrices: ["BTC": 100_000_000]
+        ).replay(events: [buy], links: [])
+
+        let dem = try XCTUnwrap(r.deemedPositions.first)
+        XCTAssertEqual(dem.deemedUnitKRW, 100_000_000, "의제 단가는 max(장부, 시가)")
+
+        let row = try XCTUnwrap(r.holdings.rows.first { $0.asset.code == "BTC" })
+        XCTAssertEqual(row.averageUnitKRW, 100_000_000, "보유 현황도 의제취득가를 반영해야 한다")
+        XCTAssertEqual(row.totalCostKRW, 100_000_000)
+
+        let agg = try XCTUnwrap(r.holdings.aggregated.first { $0.asset.code == "BTC" })
+        XCTAssertEqual(agg.totalCostKRW, 100_000_000)
+    }
 }

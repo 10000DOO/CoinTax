@@ -620,8 +620,14 @@ struct CostBasisEngine {
             return Array(lo...(TaxTime.taxStartYear - 1))
         }()
         let postYears: [Int] = {
-            guard let hi = eventYears.filter({ $0 >= TaxTime.taxStartYear }).max() else { return [] }
-            return Array(TaxTime.taxStartYear...hi)
+            let hi = eventYears.filter { $0 >= TaxTime.taxStartYear }.max()
+            // **2027 이후 거래가 한 건도 없어도 그 해를 정산한다.**
+            //
+            // 의제취득가 재기동(§37⑤)은 2027 기초를 다시 세우는데, 그 해를 정산하지 않으면
+            // 재기동한 값을 **아무도 읽지 않는다** — 보유 스냅샷이 재기동 전 단가를 그대로 쓴다.
+            // 지금은 모든 이용자의 자료가 2026 이전이라 이 경우가 기본이다.
+            guard hi != nil || !preYears.isEmpty else { return [] }
+            return Array(TaxTime.taxStartYear...max(TaxTime.taxStartYear, hi ?? TaxTime.taxStartYear))
         }()
 
         /// 코인으로 낸 수수료가 취득원가에 더해지면 **단가가 서로를 참조할 수 있다**
