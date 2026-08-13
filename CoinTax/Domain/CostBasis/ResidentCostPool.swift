@@ -169,9 +169,13 @@ final class ResidentCostPool {
 
     /// 연도별 소실 원가 합계 (모든 자산)
     func abandonedCostByYear() -> [Int: Decimal] {
+        // **순서를 고정한다.** 소수 자릿수가 긴 값(단가 × 수량)을 더할 때 순서가 달라지면
+        // 마지막 자리가 흔들려 같은 입력에서 다른 세액이 나온다 (검증기 V-RE-01).
         var out: [Int: Decimal] = [:]
-        for (asset, byYear) in flows {
-            for (year, flow) in byYear where flow.abandonedQty > 0 {
+        for asset in flows.keys.sorted() {
+            guard let byYear = flows[asset] else { continue }
+            for year in byYear.keys.sorted() {
+                guard let flow = byYear[year], flow.abandonedQty > 0 else { continue }
                 guard let unit = unitCosts[asset]?[year] else { continue }
                 out[year, default: 0] += unit * flow.abandonedQty * (outflowScales[asset]?[year] ?? 1)
             }

@@ -678,9 +678,12 @@ struct CostBasisEngine {
         // 총평균법에서는 비교 대상이 **자산별 거주자 단가 하나**다. 계정마다·매입 건마다 따로
         // 비교할 대상이 존재하지 않는다 (백서 U-09 · 작업문서 Q1 결정).
         var deemedPositions: [DeemedPosition] = []
+        // 합산 순서를 고정한다 — 딕셔너리 순회 순서에 기대면 같은 입력에서 다른 값이 나온다 (V-RE-01)
         var qtyByAsset: [String: Decimal] = [:]
-        for (_, map) in books {
-            for (code, b) in map where b.quantity > Money.qtyEpsilon {
+        for accID in books.keys.sorted(by: { $0.raw.uuidString < $1.raw.uuidString }) {
+            guard let map = books[accID] else { continue }
+            for code in map.keys.sorted() {
+                guard let b = map[code], b.quantity > Money.qtyEpsilon else { continue }
                 qtyByAsset[code, default: 0] += b.quantity
             }
         }
@@ -759,6 +762,15 @@ struct CostBasisEngine {
         for i in disposals.indices {
             let d = disposals[i]
             let effQty = effectiveQtyOfDisposal[d.id] ?? d.quantity
+            // 수량 0 처분은 원가도 0 이다 — 단가를 물을 필요가 없다.
+            // (수량 0 거래가 들어오면 풀에 그 자산 자체가 없어 단가가 nil 이 된다)
+            if Money.isApproxZero(effQty) {
+                disposals[i].costKRW = 0
+                disposals[i].feesKRW = 0
+                disposals[i].pnlKRW = d.proceedsKRW
+                disposals[i].method = .totalAverage
+                continue
+            }
             guard let cost = pool.costOfDisposal(asset: d.asset.code, year: d.taxYear, qty: effQty) else {
                 issues.append(.init(
                     id: "V-COST-01", severity: "critical",
@@ -800,9 +812,10 @@ struct CostBasisEngine {
         let lastSettledYear = postYears.last ?? preYears.last
         var rows: [HoldingsRow] = []
         var aggMap: [String: (qty: Decimal, cost: Decimal)] = [:]
-        for (accID, assetMap) in books {
-            for (code, b) in assetMap {
-                guard b.quantity > Money.qtyEpsilon else { continue }
+        for accID in books.keys.sorted(by: { $0.raw.uuidString < $1.raw.uuidString }) {
+            guard let assetMap = books[accID] else { continue }
+            for code in assetMap.keys.sorted() {
+                guard let b = assetMap[code], b.quantity > Money.qtyEpsilon else { continue }
                 let unit = lastSettledYear.flatMap { pool.unitCost(asset: code, year: $0) } ?? 0
                 rows.append(HoldingsRow(
                     accountID: accID,
