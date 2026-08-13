@@ -252,8 +252,9 @@ struct SettingsView: View {
                         Text(Fmt.unitPriceString(Decimal(string: m.priceKRW) ?? 0)).font(Theme.mono)
                         Spacer()
                         Button {
-                            env.modelContext.delete(m)
-                            try? env.modelContext.save()
+                            // 지우면 이전 계산은 낡은 것이 된다 — 표시를 안 내리면
+                            // 「검증 완료」가 남아 신고자료 내보내기가 열린 채로 있다.
+                            try? env.deleteCalculationInput(m)
                             refresh()
                         } label: { Image(systemName: "trash").font(.system(size: 10)) }
                         .buttonStyle(.borderless)
@@ -373,8 +374,8 @@ struct SettingsView: View {
             guard let url = try result.get().first else { return }
             let access = url.startAccessingSecurityScopedResource()
             defer { if access { url.stopAccessingSecurityScopedResource() } }
-            let text = try String(contentsOf: url, encoding: .utf8)
-            let n = try env.fxService.importRatesCSV(text: text, project: project)
+            // 인코딩 폴백은 다른 원본과 같은 곳에서 처리한다 (국내 환율표는 CP949 가 흔하다)
+            let n = try env.fxService.importRatesCSV(url: url, project: project)
             refresh()
             env.invalidateCalculation()
             message = "환율 \(n)일을 가져왔습니다."

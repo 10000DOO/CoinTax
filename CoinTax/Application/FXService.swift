@@ -33,15 +33,39 @@ final class FXService {
         return cache
     }
 
+    /// 저장 키로 쓸 수 있는 `yyyy-MM-dd` 로 맞춘다. 못 알아보면 `nil`.
+    ///
+    /// 환율표는 은행·중개사에서 받아 오고, 사용자가 손으로도 넣는다. 그 날짜는
+    /// `2027/01/05`·`2027.01.05`·`20270105` 로도 온다. 저장 키는 `yyyy-MM-dd` 하나뿐이라
+    /// **표기가 다르면 저장은 되는데 아무도 못 찾는다.** 그러면 그 날 환율이 없는 것이 되고
+    /// 휴일 대체 규칙이 **최대 14일 전 환율**을 대신 쓴다 — 사용자가 넣은 값이 조용히 무시된 채
+    /// 「직전 고시일 적용」이라고만 표시된다. 그래서 **들어오는 모든 길목**을 여기 한 곳으로 모은다.
+    static func normalizedDay(_ raw: String) -> String? {
+        let s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !s.isEmpty else { return nil }
+        guard let date = CSVUtil.parseDate(s, timeZone: TaxTime.seoul, formats: [
+            "yyyy-MM-dd", "yyyy/MM/dd", "yyyy.MM.dd", "yyyyMMdd"
+        ]) else { return nil }
+        // **두 자리 연도는 받지 않는다.** `27-01-05` 는 `yyyy-MM-dd` 로도 파싱에 성공해
+        // **서기 27년**이 된다 — 저장은 되고 조회는 영영 안 맞아 옛 환율이 대신 쓰인다.
+        // (환율표에 두 자리 연도가 오면 세기를 추측하는 대신 형식을 알려 주고 되돌려보낸다)
+        let year = TaxTime.calendarYearKST(date)
+        guard year >= 2000, year <= 2100 else { return nil }
+        return TaxTime.dayKST(date)
+    }
+
     func setRate(
-        day: String,
+        day rawDay: String,
         rate: Decimal,
         project: ProjectEntity,
         source: String = "manual",
         sourceDate: String? = nil
     ) throws {
+        guard let day = Self.normalizedDay(rawDay) else {
+            throw CoinTaxError.parseRow("날짜를 알아볼 수 없습니다: '\(rawDay)' — 2027-01-05 형식으로 넣어 주세요")
+        }
         // 수동 입력이 있으면 이후 자동이 덮어쓰지 않도록 기존 manual 유지 옵션은 fill 쪽에서 처리
-        let resolvedSourceDate = sourceDate ?? day
+        let resolvedSourceDate = sourceDate.flatMap { Self.normalizedDay($0) } ?? day
         if let existing = project.fxRates.first(where: { $0.day == day && $0.pair == "USD/KRW" }) {
             existing.rate = Money.decimalString(rate)
             existing.source = source
@@ -147,6 +171,16 @@ final class FXService {
         return missingDays(for: events, project: project)
     }
 
+    /// 환율 CSV 파일을 읽어 가져온다.
+    ///
+    /// **읽기 규칙을 다른 원본과 같은 곳(`CSVUtil.readText`)에 둔다.**
+    /// 예전에는 화면에서 UTF-8 로만 읽어, 국내 은행·중개사가 흔히 쓰는 CP949 환율표가
+    /// 아예 열리지 않았다 — 인코딩 폴백을 고쳐 놓고도 **이 갈래만 남아 있었다** (5차 감사 회차 27).
+    @discardableResult
+    func importRatesCSV(url: URL, project: ProjectEntity) throws -> Int {
+        try importRatesCSV(text: CSVUtil.readText(url: url), project: project)
+    }
+
     /// 환율 CSV: day,rate 또는 date,USD/KRW,rate 또는 date,currency,rate
     func importRatesCSV(text: String, project: ProjectEntity) throws -> Int {
         let rows = CSVUtil.parseLines(text)
@@ -163,8 +197,11 @@ final class FXService {
         var n = 0
         for row in rows.dropFirst() {
             guard dayI < row.count, rateI < row.count else { continue }
-            let day = row[dayI].trimmingCharacters(in: .whitespaces)
-            guard day.count >= 8, let rate = Money.parseDecimal(row[rateI]), rate > 0 else { continue }
+            // 날짜로 못 읽은 줄은 **가져온 것으로 세지 않는다.**
+            // 세어 버리면 「환율 N일을 가져왔습니다」가 거짓말이 되고,
+            // 사용자는 채워졌다고 믿은 채 옛 환율로 계산된 세액을 본다.
+            guard let day = Self.normalizedDay(row[dayI]),
+                  let rate = Money.parseDecimal(row[rateI]), rate > 0 else { continue }
             try setRate(day: day, rate: rate, project: project, source: "csv", sourceDate: day)
             n += 1
         }

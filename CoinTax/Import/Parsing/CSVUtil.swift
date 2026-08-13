@@ -38,10 +38,32 @@ enum CSVUtil {
         return out
     }
 
+    /// CP949(확장 완성형 · EUC-KR 상위호환)의 **NSStringEncoding** 값.
+    ///
+    /// `0x0422` 는 CoreFoundation 쪽 번호(`CFStringEncodings.dosKorean`)라서
+    /// `String.Encoding(rawValue:)` 에 그대로 넣으면 **어떤 파일도 디코드되지 않는다.**
+    /// 그러면 폴백이 통째로 죽고 `isoLatin1`(아무 바이트나 성공한다)로 흘러가
+    /// 한글이 `°Å·¡ÀÏ½Ã` 같은 깨진 글자가 된다 — 제네릭 표 매핑이 `거래일시`·`매수` 같은
+    /// **한글 값으로** 열과 거래 종류를 알아보므로 국내 CSV 지원이 통째로 죽었다.
+    /// 두 번호 체계는 반드시 변환해서 써야 한다.
+    static let cp949: String.Encoding = .init(
+        rawValue: CFStringConvertEncodingToNSStringEncoding(CFStringEncoding(CFStringEncodings.dosKorean.rawValue))
+    )
+
     /// UTF-8 우선, 실패 시 국내 환경에서 흔한 인코딩으로 폴백해 텍스트를 읽는다.
     static func readText(url: URL) throws -> String {
         let data = try Data(contentsOf: url)
-        let candidates: [String.Encoding] = [.utf8, .utf16, .init(rawValue: 0x0422) /* CP949 */, .isoLatin1]
+        // UTF-16 은 **표식(BOM)이 있을 때만** 시도한다.
+        //
+        // 표식이 없으면 아무 바이트나 UTF-16 으로 「성공」한다 (짝수 길이면 거의 항상).
+        // 그래서 CP949 로 저장한 국내 파일이 UTF-16 으로 가로채여 깨진 글자가 되고,
+        // 아무 오류도 안 나므로 사용자는 알 수 없다 — 국내 은행 환율표에서 실제로 재현됐다.
+        // 진짜 UTF-16 파일은 사실상 언제나 표식을 갖고 있으므로 이 조건으로 충분하다.
+        let hasUTF16BOM = data.count >= 2
+            && ((data[0] == 0xFF && data[1] == 0xFE) || (data[0] == 0xFE && data[1] == 0xFF))
+        let candidates: [String.Encoding] = hasUTF16BOM
+            ? [.utf16, .utf8, cp949, .isoLatin1]
+            : [.utf8, cp949, .isoLatin1]
         for enc in candidates {
             if let s = String(data: data, encoding: enc), !s.isEmpty {
                 return stripBOM(s)
@@ -188,15 +210,28 @@ enum CSVUtil {
         return (amount, unit.isEmpty ? nil : unit)
     }
 
+    /// 거래 시각으로 받아들일 연도 범위.
+    ///
+    /// **네 자리 형식이 두 자리 연도를 삼킨다.** `yyyy-MM-dd` 로 `27-03-01` 을 읽으면
+    /// 오류 없이 **서기 27년**이 된다. 그 거래는 과세연도 밖으로 나가
+    /// **신고 집계에서 통째로 빠진다** — 세금이 조용히 줄어드는 방향이다.
+    /// (바이낸스는 출금 내역에 실제로 두 자리 연도를 쓴다. 다른 export 에 섞여 올 수 있다.)
+    ///
+    /// 세기를 **추측하지 않는다.** 범위를 벗어나면 그 형식은 실패로 보고 다음 형식을 시도하며,
+    /// 끝내 못 읽으면 파서가 「시각 파싱 실패 — 건너뜀」으로 알린다. 조용히 틀리는 것보다 낫다.
+    private static let plausibleYears = 2000...2100
+
     static func parseDate(_ string: String, timeZone: TimeZone, formats: [String]) -> Date? {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.timeZone = timeZone
+        var cal = Calendar(identifier: .gregorian)
+        cal.timeZone = timeZone
         for fmt in formats {
             f.dateFormat = fmt
-            if let d = f.date(from: string.trimmingCharacters(in: .whitespaces)) {
-                return d
-            }
+            guard let d = f.date(from: string.trimmingCharacters(in: .whitespaces)) else { continue }
+            guard plausibleYears.contains(cal.component(.year, from: d)) else { continue }
+            return d
         }
         return nil
     }
