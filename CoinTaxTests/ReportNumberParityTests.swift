@@ -151,4 +151,43 @@ final class ReportNumberParityTests: XCTestCase {
         XCTAssertEqual(back.deemed.first?.deemedUnitKRW, Decimal(string: "0.031")!)
         XCTAssertEqual(back.totalDeemedCostKRW, summary.totalDeemedCostKRW)
     }
+
+    // MARK: - 신고 안내·필요경비 의제가 파일에도 실리는가 (이번 회차 추가분)
+
+    /// 사용자는 **파일을 보고 신고서를 쓴다.** 화면에만 있는 안내는 없는 것과 같다.
+    func testFilingGuideAppearsInCSVAndPDF() throws {
+        var s = makeSummary(deemed: [])
+        s.verification = VerificationReport(runID: UUID(), status: "passed", issues: [], calculatedAt: Date())
+
+        let csv = try ReportCSVExporter.exportCSV(s)
+        for g in TaxCopy.filingGuide {
+            XCTAssertTrue(csv.contains(g.prefix(20)), "CSV 에 신고 안내가 빠졌다: \(g.prefix(20))")
+        }
+
+        let pdf = try ReportPDFExporter.exportPDF(s)
+        let text = (PDFDocument(data: pdf)?.string ?? "")
+        XCTAssertTrue(text.contains("위택스"), "PDF 에 지방소득세 납부처가 빠졌다")
+        XCTAssertTrue(text.contains("홈택스에 낼 국세"))
+    }
+
+    /// `[법]` §37⑥ 을 켰으면 **어느 자산에 적용했는지**가 파일에 남아야 한다 —
+    /// 나중에 「이 숫자는 어떤 필요경비로 계산했나」에 답할 수 있어야 한다.
+    func testProxyExpenseIsRecordedInExports() throws {
+        var s = makeSummary(deemed: [])
+        s.verification = VerificationReport(runID: UUID(), status: "passed", issues: [], calculatedAt: Date())
+        s.proxyExpenseAssets = ["BTC"]
+        s.proxyExpenseAlternative = DeemedAlternative(
+            basisMode: "proxy_off", basisLabel: "의제 50%를 쓰지 않으면",
+            totalDeemedCostKRW: 31_000_000, netIncomeKRW: 69_000_000, totalTaxKRW: 14_630_000
+        )
+
+        let csv = try ReportCSVExporter.exportCSV(s)
+        XCTAssertTrue(csv.contains("proxyExpense50Assets"))
+        XCTAssertTrue(csv.contains("proxyAlt"))
+
+        let text = (PDFDocument(data: try ReportPDFExporter.exportPDF(s))?.string ?? "")
+        XCTAssertTrue(text.contains("필요경비 의제 50%"))
+        XCTAssertTrue(text.contains("BTC"))
+        XCTAssertTrue(text.contains("수수료를 따로 빼지 않습니다"), "조문 후단(부대비용 불산입)이 파일에도 남아야 한다")
+    }
 }
