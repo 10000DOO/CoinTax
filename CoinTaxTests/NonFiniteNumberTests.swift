@@ -49,7 +49,7 @@ final class NonFiniteNumberTests: XCTestCase {
     /// 먼저 사실 확인 — `max(0, NaN)` 은 0 이고, 그래서 세액이 0 이 된다
     func testNaNCollapsesTaxToZero() {
         let p = KROtherIncomeTaxRatePolicy()
-        let computed = p.compute(incomeKRW: Decimal.nan, rounding: PlainKRWRoundingPolicy())
+        let computed = p.compute(incomeKRW: Decimal.nan, rounding: StatutoryKRWRoundingPolicy())
         XCTAssertEqual(computed.taxBaseKRW, 0, "max(0, NaN) 이 0 이 된다는 사실을 고정한다")
         XCTAssertEqual(computed.totalTaxKRW, 0, "즉 세액이 0원으로 나온다")
     }

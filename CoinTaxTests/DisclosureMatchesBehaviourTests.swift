@@ -65,7 +65,7 @@ final class DisclosureMatchesBehaviourTests: XCTestCase {
     /// 「손실은 다음 해로 이월되지 않는다」 — 문구와 세율 정책이 같은 말을 하는가
     func testLossCarryForwardNoticeMatchesPolicy() {
         let p = KROtherIncomeTaxRatePolicy()
-        let r = PlainKRWRoundingPolicy()
+        let r = StatutoryKRWRoundingPolicy()
         XCTAssertEqual(p.compute(incomeKRW: -10_000_000, rounding: r).taxBaseKRW, 0)
         XCTAssertTrue(TaxCopy.lossNotCarriedForward.contains("이월"))
     }

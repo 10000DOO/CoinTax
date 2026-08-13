@@ -99,12 +99,14 @@ enum Verifier {
         }
 
         // ── V-TAX-02/03/04 세액 ────────────────────────────────────────
-        let expectedBase = max(0, s.netIncomeKRW - s.basicDeductionKRW)
+        // 끝수는 국고금 관리법 §47 — 과세표준 1원 버림, 세액은 국세·지방세 각각 10원 버림.
+        // 정책과 같은 함수를 써야 한다. 여기서 반올림으로 검사하면 **법대로 계산한 값을 Critical 로 막는다**.
+        let expectedBase = p.rounding.floorTaxBaseKRW(max(0, s.netIncomeKRW - s.basicDeductionKRW))
         if s.taxBaseKRW != expectedBase {
             issues.append(.init(id: "V-TAX-02", severity: "critical", message: "과세표준 불일치", context: nil))
         }
-        let expectedNational = p.rounding.roundKRW(s.taxBaseKRW * p.taxRate.nationalRate)
-        let expectedLocal = p.rounding.roundKRW(s.taxBaseKRW * p.taxRate.localRate)
+        let expectedNational = p.rounding.floorPayableKRW(s.taxBaseKRW * p.taxRate.nationalRate)
+        let expectedLocal = p.rounding.floorPayableKRW(s.taxBaseKRW * p.taxRate.localRate)
         if s.nationalTaxKRW != expectedNational {
             issues.append(.init(id: "V-TAX-03", severity: "critical", message: "국세 세율 검증 실패", context: nil))
         }

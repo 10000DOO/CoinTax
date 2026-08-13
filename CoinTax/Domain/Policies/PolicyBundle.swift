@@ -17,7 +17,7 @@ struct PolicyBundle: Sendable {
             costMethodResolver: VASPMAElseFIFOResolver(),
             deemed: MaxBookMarketDeemedPolicy(),
             taxRate: KROtherIncomeTaxRatePolicy(),
-            rounding: PlainKRWRoundingPolicy(),
+            rounding: StatutoryKRWRoundingPolicy(),
             fxAssumption: USDTEqualsUSDAssumption(),
             disclaimers: TaxCopy.all
         )

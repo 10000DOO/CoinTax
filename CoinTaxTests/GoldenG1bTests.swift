@@ -56,10 +56,13 @@ final class GoldenG1bTests: XCTestCase {
             deemed: [],
             policies: policies
         )
+        // 끝수는 국고금 관리법 §47 — 세액은 국세·지방세 **각각** 10원 버림
+        let rounding = StatutoryKRWRoundingPolicy()
         XCTAssertEqual(summary.taxBaseKRW, Decimal(7_361_400))
-        XCTAssertEqual(summary.nationalTaxKRW, Money.roundKRW(Decimal(7_361_400) * Decimal(string: "0.2")!))
-        XCTAssertEqual(summary.localTaxKRW, Money.roundKRW(Decimal(7_361_400) * Decimal(string: "0.02")!))
+        XCTAssertEqual(summary.nationalTaxKRW, rounding.floorPayableKRW(Decimal(7_361_400) * Decimal(string: "0.2")!))
+        XCTAssertEqual(summary.localTaxKRW, rounding.floorPayableKRW(Decimal(7_361_400) * Decimal(string: "0.02")!))
         XCTAssertEqual(summary.nationalTaxKRW, Decimal(1_472_280))
-        XCTAssertEqual(summary.localTaxKRW, Decimal(147_228))
+        // 7,361,400 × 2% = 147,228 → 10원 버림 → 147,220
+        XCTAssertEqual(summary.localTaxKRW, Decimal(147_220))
     }
 }

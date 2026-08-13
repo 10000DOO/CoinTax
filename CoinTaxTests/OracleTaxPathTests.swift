@@ -297,18 +297,52 @@ final class OracleTaxPathTests: XCTestCase {
 
     func testF_basicDeductionBoundary() {
         let p = KROtherIncomeTaxRatePolicy()
-        let r = PlainKRWRoundingPolicy()
+        let r = StatutoryKRWRoundingPolicy()
 
         let exact = p.compute(incomeKRW: 2_500_000, rounding: r)
         XCTAssertEqual(exact.taxBaseKRW, 0)
         XCTAssertEqual(exact.totalTaxKRW, 0)
 
+        // 과세표준 10원 → 국세 2원·지방세 0.2원. 둘 다 **10원 미만이라 버려져 0** 이 된다
+        // (국고금 관리법 §47① · 지방세기본법 §59). 예전에는 반올림해 2원이 남았다.
         let overByTen = p.compute(incomeKRW: 2_500_010, rounding: r)
         XCTAssertEqual(overByTen.taxBaseKRW, 10)
-        XCTAssertEqual(overByTen.nationalTaxKRW, 2)
+        XCTAssertEqual(overByTen.nationalTaxKRW, 0)
+        XCTAssertEqual(overByTen.localTaxKRW, 0)
 
         let negative = p.compute(incomeKRW: -1, rounding: r)
         XCTAssertEqual(negative.taxBaseKRW, 0)
         XCTAssertEqual(negative.totalTaxKRW, 0)
+    }
+
+    // MARK: - G. 끝수 계산 (국고금 관리법 §47 · 지방세기본법 §59)
+
+    /// 손계산으로 고정한다. 국세와 지방세를 **각각** 10원 버림해야 하고,
+    /// 합계를 절사하면 국세청 계산과 어긋난다.
+    func testG_statutoryRounding() {
+        let p = KROtherIncomeTaxRatePolicy()
+        let r = StatutoryKRWRoundingPolicy()
+
+        // 소득 12,345,678.9 → 과세표준 9,845,678.9 → **1원 미만 버림** → 9,845,678
+        let s = p.compute(incomeKRW: Decimal(string: "12345678.9")!, rounding: r)
+        XCTAssertEqual(s.taxBaseKRW, 9_845_678, "과세표준은 1원 미만을 버린다 (§47②)")
+
+        // 국세 9,845,678 × 20% = 1,969,135.6 → 10원 버림 → 1,969,130
+        XCTAssertEqual(s.nationalTaxKRW, 1_969_130)
+        // 지방세 9,845,678 × 2% = 196,913.56 → 10원 버림 → 196,910
+        XCTAssertEqual(s.localTaxKRW, 196_910)
+        XCTAssertEqual(s.totalTaxKRW, 2_166_040)
+
+        // 합쳐서 절사했다면 2,166,049.16 → 2,166,040 으로 **우연히 같아지는** 구간이 있다.
+        // 각각 절사가 달라지는 값으로 한 번 더 고정한다.
+        //   과세표준 1,000,009 → 국세 200,001.8 → 200,000 / 지방세 20,000.18 → 20,000
+        //   합산 후 절사였다면 220,001.98 → 220,000 (같음). 아래는 갈리는 값이다.
+        //   과세표준 3,500,049 → 국세 700,009.8 → 700,000 / 지방세 70,000.98 → 70,000 → 합 770,000
+        //   합산 후 절사: 770,010.78 → 770,010  ← 10원 차이
+        let split = p.compute(incomeKRW: 2_500_000 + 3_500_049, rounding: r)
+        XCTAssertEqual(split.taxBaseKRW, 3_500_049)
+        XCTAssertEqual(split.nationalTaxKRW, 700_000)
+        XCTAssertEqual(split.localTaxKRW, 70_000)
+        XCTAssertEqual(split.totalTaxKRW, 770_000, "각각 절사한 합이어야 한다 (합산 후 절사면 770,010)")
     }
 }
