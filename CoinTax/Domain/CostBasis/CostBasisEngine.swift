@@ -450,28 +450,43 @@ struct CostBasisEngine {
                     if e.baseAsset.isKRW { continue }
                     let wQty = Money.abs(e.quantity)
                     let b = book(for: e.accountID, asset: e.baseAsset)
-                    if let link = linkByFrom[e.id], let dep = eventsByID[link.toEventID] {
-                        let rQty = Money.abs(dep.quantity)
-                        let out = b.disposeClamped(qty: wQty)
-                        if out.shortfallQty > Money.qtyEpsilon {
+                    // 원금 처분과 수수료 처분은 **연결 여부와 무관하게 똑같다.** 갈래마다 따로 적으면
+                    // 한쪽만 고쳐지고 다른 쪽이 남는다 — 실제로 그렇게 새어 나갔다 (감사 D4-1).
+                    let out = b.disposeClamped(qty: wQty)
+                    if out.shortfallQty > Money.qtyEpsilon {
+                        shortfallKeys.insert(bookKey(e.accountID, e.baseAsset))
+                        let dust = Money.isDustShortfall(out.shortfallQty, of: wQty)
+                        issues.append(.init(
+                            id: "V-QTY-02", severity: dust ? "warning" : "critical",
+                            message: dust
+                                ? "출금 수량이 장부보다 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code) 많습니다 (거래소 반올림 수준)"
+                                : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — ① 이자·리베이트·에어드롭처럼 거래·입출금이 아닌 방식으로 들어온 기록이 빠졌거나 ② 이 계정의 거래내역 시작 전 보유분이 있습니다. 바이낸스는 「Transaction History」, OKX는 「Funding History」를 함께 넣고, 그래도 남으면 더 이전 기간 원본을 받으세요",
+                            context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
+                        ))
+                    }
+                    // 출금 수수료가 원금과 별도로 지갑에서 빠지는 경우(바이낸스 Withdraw).
+                    // **어느 자산으로 냈는지는 규칙 한 벌이 정한다** — 원화나 제3코인으로 적혀 있으면
+                    // 이 코인은 줄지 않는다. 예전에는 연결 안 된 출금에서 그 조건이 빠져 있었다.
+                    var explicitFee: Decimal = 0
+                    if let feeQty = LedgerDelta.withdrawalFeeQuantity(e) {
+                        let feeOut = b.disposeClamped(qty: feeQty)
+                        explicitFee = feeOut.costKRW
+                        if feeOut.shortfallQty > Money.qtyEpsilon {
+                            // 여기서 기록하지 않으면 검증기가 원인 불명의 V-QTY-01 로만 알려
+                            // 사용자가 무엇을 해야 하는지 모른다.
                             shortfallKeys.insert(bookKey(e.accountID, e.baseAsset))
-                            let dust = Money.isDustShortfall(out.shortfallQty, of: wQty)
+                            let dust = Money.isDustShortfall(feeOut.shortfallQty, of: feeQty)
                             issues.append(.init(
                                 id: "V-QTY-02", severity: dust ? "warning" : "critical",
                                 message: dust
-                                    ? "출금 수량이 장부보다 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code) 많습니다 (거래소 반올림 수준)"
-                                    : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — ① 이자·리베이트·에어드롭처럼 거래·입출금이 아닌 방식으로 들어온 기록이 빠졌거나 ② 이 계정의 거래내역 시작 전 보유분이 있습니다. 바이낸스는 「Transaction History」, OKX는 「Funding History」를 함께 넣고, 그래도 남으면 더 이전 기간 원본을 받으세요",
+                                    ? "출금 수수료가 장부보다 \(Money.decimalString(feeOut.shortfallQty)) \(e.baseAsset.code) 많습니다 (거래소 반올림 수준)"
+                                    : "출금 수수료를 뺄 \(e.baseAsset.code)가 부족합니다 (부족 \(Money.decimalString(feeOut.shortfallQty))) — 이 계정의 거래내역 시작 전 보유분이 있거나 내역 일부가 빠졌을 수 있습니다",
                                 context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
                             ))
                         }
-                        // 출금 수수료가 원금과 별도로 지갑에서 빠지는 경우(바이낸스 Withdraw) 그 수량도 처분한다.
-                        var explicitFee: Decimal = 0
-                        if !e.quantityIsNetOfFee,
-                           let fee = e.feeAmount, fee > 0,
-                           e.feeAsset == nil || e.feeAsset == e.baseAsset {
-                            let feeOut = b.disposeClamped(qty: Money.abs(fee))
-                            explicitFee = feeOut.costKRW
-                        }
+                    }
+                    if let link = linkByFrom[e.id], let dep = eventsByID[link.toEventID] {
+                        let rQty = Money.abs(dep.quantity)
                         guard wQty > 0 else { continue }
                         let result = policies.transferCost.apply(
                             outboundCostKRW: out.costKRW,
@@ -499,20 +514,9 @@ struct CostBasisEngine {
                             ratio: Money.clamp(rQty / wQty, 0, 1)
                         ))
                     } else {
-                        let out = b.disposeClamped(qty: wQty)
-                        if out.shortfallQty > Money.qtyEpsilon {
-                            shortfallKeys.insert(bookKey(e.accountID, e.baseAsset))
-                            let dust = Money.isDustShortfall(out.shortfallQty, of: wQty)
-                            issues.append(.init(
-                                id: "V-QTY-02", severity: dust ? "warning" : "critical",
-                                message: dust
-                                    ? "출금 수량이 장부보다 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code) 많습니다 (거래소 반올림 수준)"
-                                    : "보유 수량보다 많은 출금입니다 (부족 \(Money.decimalString(out.shortfallQty)) \(e.baseAsset.code)) — ① 이자·리베이트·에어드롭처럼 거래·입출금이 아닌 방식으로 들어온 기록이 빠졌거나 ② 이 계정의 거래내역 시작 전 보유분이 있습니다. 바이낸스는 「Transaction History」, OKX는 「Funding History」를 함께 넣고, 그래도 남으면 더 이전 기간 원본을 받으세요",
-                                context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp)) \(e.rawRef ?? e.id.raw.uuidString)"
-                            ))
-                        }
-                        abandonedTotal += out.costKRW
-                        abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW
+                        // 원금 + 별도 출금 수수료의 원가가 함께 소멸한다
+                        abandonedTotal += out.costKRW + explicitFee
+                        abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += out.costKRW + explicitFee
                         warnings.append("미매칭 출금 원가 소멸: \(e.baseAsset.code) \(Money.decimalString(wQty))")
                         // 사용자가 「잘못 보내 소멸」로 이미 판단한 건은 처리 결과가 같으므로
                         // 「연결하세요」를 다시 재촉하지 않는다. 원가가 사라졌다는 사실만 남긴다.
@@ -523,11 +527,6 @@ struct CostBasisEngine {
                                 : "연결되지 않은 출금의 취득원가는 소멸 처리됩니다 (세액이 커지는 방향) — 다른 거래소로 보낸 것이면 상대 입금을 연결하고, 개인지갑으로 보낸 것이면 「전송 연결」 화면에서 개인지갑으로 지정하세요 (지정하지 않으면 보유 현황에서도 빠집니다)",
                             context: "\(e.baseAsset.code) \(TaxTime.dayKST(e.timestamp))"
                         ))
-                        if !e.quantityIsNetOfFee, let fee = e.feeAmount, fee > 0 {
-                            let feeOut = b.disposeClamped(qty: Money.abs(fee))
-                            abandonedTotal += feeOut.costKRW
-                            abandonedByYear[TaxTime.calendarYearKST(e.timestamp), default: 0] += feeOut.costKRW
-                        }
                     }
 
                 case .transferInternal:

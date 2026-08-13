@@ -26,6 +26,21 @@ enum LedgerDelta {
         return !e.quantityIsNetOfFee
     }
 
+    /// 출금 수수료가 **원금과 별도로** 같은 자산에서 더 빠지는 수량 (바이낸스 Withdraw 의 `Fee` 열).
+    ///
+    /// - 수수료 자산이 비어 있으면 **보내는 코인**으로 본다. 출금 수수료는 네트워크 수수료라
+    ///   거의 언제나 보내는 코인으로 낸다.
+    /// - **다른 자산(원화·제3코인)으로 적혀 있으면 이 코인 수량은 줄지 않는다.**
+    ///   예전에는 엔진의 「연결 안 된 출금」 갈래만 이 조건을 빠뜨려, 원화 1,500원짜리 수수료가
+    ///   코인 1,500개를 처분했다 (감사 D4-1 — D-1 과 같은 「수수료 자산 넘겨짚기」의 마지막 한 곳).
+    ///   규칙을 여기 한 곳에 두고 엔진이 그대로 쓰게 한다.
+    static func withdrawalFeeQuantity(_ e: LedgerEvent) -> Decimal? {
+        guard e.type == .withdrawal, !e.quantityIsNetOfFee else { return nil }
+        guard let fee = e.feeAmount, fee > 0 else { return nil }
+        guard e.feeAsset == nil || e.feeAsset == e.baseAsset else { return nil }
+        return Money.abs(fee)
+    }
+
     /// **원가 장부 기준** 변화.
     ///
     /// 계정 안의 지갑 이동(`transferInternal`)은 계정×자산 단일 장부라 총수량이 변하지 않는다.
@@ -65,10 +80,8 @@ enum LedgerDelta {
             out.append(Change(asset: e.baseAsset, delta: qty))
         case .withdrawal:
             out.append(Change(asset: e.baseAsset, delta: -qty))
-            // 출금 수수료가 원금과 별도로 빠지는 경우 (바이낸스 Withdraw 의 Fee 열)
-            if !e.quantityIsNetOfFee, let fee = e.feeAmount, fee > 0,
-               e.feeAsset == nil || e.feeAsset == e.baseAsset {
-                out.append(Change(asset: e.baseAsset, delta: -Money.abs(fee)))
+            if let feeQty = withdrawalFeeQuantity(e) {
+                out.append(Change(asset: e.baseAsset, delta: -feeQty))
             }
         case .transferInternal, .fee, .fiatDeposit, .fiatWithdraw, .other, .ignored:
             break
