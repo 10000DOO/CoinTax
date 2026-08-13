@@ -123,3 +123,6 @@ coverage/
 !docs/samples/synthetic/**/*.csv
 !docs/samples/synthetic/**/*.txt
 # -----------------------------------------------------------------------------
+
+# CodeGraph 인덱스 (파생물, 재생성 가능)
+.codegraph/

@@ -51,6 +51,31 @@ if [ -z "$SUMMARY" ]; then
 fi
 
 echo "$SUMMARY"
+
+# 테스트 **프로세스가 죽으면** 실패 줄이 안 찍힌다.
+#
+# xcodebuild 는 죽은 자리에서 러너를 다시 띄우고, 죽은 테스트와 그 뒤에 있던 테스트들을
+# 합계에서 통째로 빼 버린다. 그러면 "Executed 194 tests, with 0 failures" 처럼
+# **정상 통과처럼 보이는 줄**이 남는다 (실제로 54건이 안 돌았는데 SMOKE OK 가 나왔다).
+# 합계 줄만 보는 판정으로는 절대 못 잡으므로 재시작 흔적을 직접 본다.
+if grep -aq "Restarting after unexpected exit, crash, or test timeout" "$LOG"; then
+  echo "--- 테스트 도중 크래시/타임아웃이 있었습니다 (합계는 믿을 수 없습니다) ---"
+  grep -aB3 "Restarting after unexpected exit" "$LOG" | grep -aE "Test Case .* started|Fatal error|Restarting" | tail -12
+  exit 1
+fi
+
+# 테스트가 **조용히 사라지는** 것도 막는다.
+#
+# 파일이 타깃에서 빠지거나 스위트가 통째로 안 돌면 실패 없이 개수만 줄어든다.
+# 이 앱의 품질 근거가 「N건 초록불」이므로, 개수가 줄면 그 자체가 회귀다.
+# 새 테스트를 추가하면 이 값을 함께 올린다.
+MIN_TESTS=324
+COUNT="$(printf '%s' "$SUMMARY" | sed -nE 's/.*Executed ([0-9]+) tests?.*/\1/p')"
+if [ -n "$COUNT" ] && [ "$COUNT" -lt "$MIN_TESTS" ]; then
+  echo "--- 테스트가 $MIN_TESTS 건보다 적게 돌았습니다 ($COUNT 건) — 사라진 테스트가 있습니다 ---"
+  exit 1
+fi
+
 if echo "$SUMMARY" | grep -qE "and 0 failures|with 0 failures" && [ "$FAIL_LINES" -eq 0 ]; then
   echo "SMOKE OK"
   exit 0
