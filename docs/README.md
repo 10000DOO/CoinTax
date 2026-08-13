@@ -30,8 +30,9 @@
 
 | 문서 | 설명 |
 |------|------|
+| [00-tax-law-ssot.md](./00-tax-law-ssot.md) | **세법 백서 (SSOT).** 법령 원문 기반 사실만. 미결사항 19건 별도 정리 |
 | [01-requirements.md](./01-requirements.md) | 기능·비기능·MVP |
-| [03-tax-rules.md](./03-tax-rules.md) | 세금 가정 |
+| [03-tax-rules.md](./03-tax-rules.md) | 세금 가정 (근거는 00번 문서) |
 | [04-import-formats.md](./04-import-formats.md) | **멀티 포맷 Import** |
 | [05-decisions.md](./05-decisions.md) | 확정 결정 |
 | [06-integrity.md](./06-integrity.md) | 검증 불변식 |
