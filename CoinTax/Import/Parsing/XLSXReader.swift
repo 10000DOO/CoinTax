@@ -68,25 +68,25 @@ enum XLSXReader {
     private static func parseSheetXML(_ xml: String, shared: [String]) -> [[String]] {
         var rows: [[String]] = []
         let rowPattern = try! NSRegularExpression(pattern: #"<row[^>]*>(.*?)</row>"#, options: [.dotMatchesLineSeparators])
-        let cPattern = try! NSRegularExpression(pattern: #"<c([^>]*)>(.*?)</c>|<c([^/]*)/>"#, options: [.dotMatchesLineSeparators])
+        // 셀은 `<c …>값</c>` 또는 **혼자 닫히는** `<c … />` 두 가지다.
+        //
+        // 「내용이 있는 셀」을 먼저 보는 갈래로 짜면, 빈 셀 `<c r="B1" s="2"/>` 에서
+        // 여는 태그가 `/` 까지 삼킨 뒤 **다음 셀의 `</c>` 까지 한 덩어리로** 잡힌다.
+        // 그러면 다음 셀 값이 빈 셀 자리에 들어앉고 그 뒤가 한 칸씩 밀린다
+        // (엑셀은 값 없이 서식만 있는 칸을 이 형태로 쓴다. 바이낸스 xlsx 는 잔고 열이 없어
+        //  V-BAL 로도 못 잡으므로, 수량·대금이 다른 열에서 읽혀도 조용히 지나간다).
+        //
+        // 그래서 닫는 방식을 **한 정규식 안에서 같은 층위로** 고른다 — 속성은 `>` 를 넘지 않는다.
+        let cPattern = try! NSRegularExpression(pattern: #"<c([^>]*?)(?:/>|>(.*?)</c>)"#, options: [.dotMatchesLineSeparators])
         let ns = xml as NSString
         for rm in rowPattern.matches(in: xml, range: NSRange(location: 0, length: ns.length)) {
             let rowXML = ns.substring(with: rm.range(at: 1))
             var cells: [Int: String] = [:]
             let rns = rowXML as NSString
             for cm in cPattern.matches(in: rowXML, range: NSRange(location: 0, length: rns.length)) {
-                let attrs: String
-                let body: String
-                if cm.range(at: 1).location != NSNotFound {
-                    attrs = rns.substring(with: cm.range(at: 1))
-                    body = rns.substring(with: cm.range(at: 2))
-                } else if cm.range(at: 3).location != NSNotFound {
-                    attrs = rns.substring(with: cm.range(at: 3))
-                    body = ""
-                } else {
-                    attrs = ""
-                    body = ""
-                }
+                let attrs = cm.range(at: 1).location == NSNotFound ? "" : rns.substring(with: cm.range(at: 1))
+                // 혼자 닫히는 셀은 내용 자체가 없다
+                let body = cm.range(at: 2).location == NSNotFound ? "" : rns.substring(with: cm.range(at: 2))
                 let col = columnIndex(from: attrs)
                 let value = cellValue(attrs: attrs, body: body, shared: shared)
                 cells[col] = value
@@ -116,12 +116,16 @@ enum XLSXReader {
 
     private static func cellValue(attrs: String, body: String, shared: [String]) -> String {
         if attrs.contains("t=\"inlineStr\"") {
-            let tPattern = try! NSRegularExpression(pattern: #"<t[^>]*>(.*?)</t>"#)
+            // 한 칸 안에서 글씨체가 나뉘면 엑셀은 그 칸을 **조각**(`<r><t>…</t></r>`)으로 쪼개 적는다.
+            // 첫 조각만 읽으면 값이 잘린다 — `1234.5` 가 `1234` 가 되어도 숫자로는 읽히므로
+            // 조용히 틀린 수량·금액이 된다. 공유 문자열 쪽은 이미 조각을 이어 붙이고 있다.
+            let tPattern = try! NSRegularExpression(pattern: #"<t[^>]*>(.*?)</t>"#, options: [.dotMatchesLineSeparators])
             let ns = body as NSString
-            if let m = tPattern.firstMatch(in: body, range: NSRange(location: 0, length: ns.length)) {
-                return decodeXML(ns.substring(with: m.range(at: 1)))
+            var text = ""
+            for m in tPattern.matches(in: body, range: NSRange(location: 0, length: ns.length)) {
+                text += ns.substring(with: m.range(at: 1))
             }
-            return ""
+            return decodeXML(text)
         }
         if attrs.contains("t=\"s\"") {
             let vPattern = try! NSRegularExpression(pattern: #"<v>(.*?)</v>"#)
