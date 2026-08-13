@@ -109,9 +109,11 @@ enum ReportPDFExporter {
             let modeLabel = DeemedBasisMode(rawValue: s.deemedBasisMode)?.label ?? s.deemedBasisMode
             lines.append("의제취득가 (2027-01-01 0시 기준 · \(modeLabel))")
             for d in s.deemed {
-                let market = d.marketUnitKRW.map { krw($0) } ?? "-"
-                lines.append("  \(d.asset.code) qty=\(Money.decimalString(d.quantity)) 장부=\(krw(d.bookUnitKRW)) 시가=\(market) 채택=\(krw(d.deemedUnitKRW)) (\(d.reason))")
+                // 단가는 원 단위로 반올림하지 않는다 — 1원 미만 코인(SHIB 등)이 0원이 된다
+                let market = d.marketUnitKRW.map { Money.unitPriceString($0) } ?? "-"
+                lines.append("  \(d.asset.code) qty=\(Money.decimalString(d.quantity)) 장부=\(Money.unitPriceString(d.bookUnitKRW)) 시가=\(market) 채택=\(Money.unitPriceString(d.deemedUnitKRW)) 취득가=\(krw(d.totalDeemedKRW)) (\(d.reason))")
             }
+            lines.append("  합계(채택 방식 의제취득가): \(krw(s.totalDeemedCostKRW)) 원")
             if let alt = s.deemedAlternative {
                 lines.append("  [참고] 다른 방식(\(alt.basisLabel)) 적용 시 — 의제취득가 \(krw(alt.totalDeemedCostKRW)) / 소득 \(krw(alt.netIncomeKRW)) / 세액 \(krw(alt.totalTaxKRW))")
                 lines.append("  ※ 어느 방식이 맞는지는 세무 확인 대기 (TQ-01)")

@@ -27,6 +27,16 @@ enum Money {
         return result
     }
 
+    /// **단가**처럼 1원 미만이 의미를 갖는 값의 표기.
+    ///
+    /// 원화 총액은 원 단위로 반올림하지만(`roundKRW`), 같은 규칙을 단가에 쓰면
+    /// 한 개에 1원이 안 되는 코인(SHIB·PEPE 등)의 취득단가가 **0원**이 된다.
+    /// 그 파일을 보고 신고서를 쓰면 취득가액을 0으로 적어 세금이 크게 늘어난다.
+    /// 화면은 이미 소수를 유지하고 있었고(`Fmt.unitPriceString`), CSV·PDF만 뭉개고 있었다.
+    static func unitPriceString(_ value: Decimal) -> String {
+        abs(value) < 1 && value != 0 ? decimalString(value) : decimalString(roundKRW(value))
+    }
+
     static func abs(_ d: Decimal) -> Decimal {
         d < 0 ? -d : d
     }

@@ -41,6 +41,11 @@ enum ReportCSVExporter {
         tax("localTaxKRW", summary.localTaxKRW)
         tax("totalTaxKRW", summary.totalTaxKRW)
         tax("abandonedTransferCostKRW", summary.abandonedTransferCostKRW)
+        // 채택한 방식의 의제취득가 **총액**. 화면에는 「합계」로 있는데 파일에만 없었다 —
+        // 신고서 취득가액 칸에 옮겨 적는 값이라 파일에 없으면 화면을 다시 봐야 한다.
+        if !summary.deemed.isEmpty {
+            tax("totalDeemedCostKRW", summary.totalDeemedCostKRW)
+        }
 
         let iso = ISO8601DateFormatter()
         for d in summary.disposals {
@@ -54,8 +59,16 @@ enum ReportCSVExporter {
             rows.append([
                 "deemed", dem.asset.code,
                 Money.decimalString(dem.quantity),
-                krw(dem.deemedUnitKRW),
+                // 단가는 원 단위로 반올림하지 않는다 — 1원 미만 코인이 0이 된다
+                Money.unitPriceString(dem.deemedUnitKRW),
                 dem.reason
+            ])
+            // 채택 단가만으로는 검산이 안 된다. 장부·시가·그 자산의 취득가 총액을 함께 남긴다
+            rows.append([
+                "deemedDetail", dem.asset.code,
+                Money.unitPriceString(dem.bookUnitKRW),
+                dem.marketUnitKRW.map { Money.unitPriceString($0) } ?? "",
+                krw(dem.totalDeemedKRW)
             ])
         }
 
