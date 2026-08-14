@@ -45,8 +45,8 @@
 | deploymentTarget | macOS 15.0 |
 | 언어 UI | 한국어 |
 | 합산 통화 | KRW |
-| 빗썸 원가법 | **이동평균** |
-| 바이낸스·OKX 원가법 | **FIFO** |
+| 원가법 | **거주자별 총평균법** (`[영]` 소득세법 §88① · 계정 구분 없음) |
+| 총평균 단가 확정 시점 | **과세기간 종료 후** — 연말에 더 사면 그해 앞선 처분의 필요경비도 바뀐다 (`[영]` §92②4) |
 | 전송 소실 원가 | **`abandon_lost_cost`**: 입고원가 = 출고원가×(입고수량/출고수량), 소실 분 **필요경비 미산입** |
 | 전송 소실 고지 | 아래 §2.1 문구 **그대로** (`TaxCopy.transferCost`) |
 | USD 페그 스테이블 | v1 **1 USDT = 1 USDC = 1 USD**, 당일 **USD/KRW 기준환율**. 대상은 `AssetSymbol.isUSDPegged` (`USDT`·`USDC`·`USD`) 뿐 — 페그 없는 코인은 넣지 않는다 |
@@ -81,7 +81,7 @@
 USDT·USDC는 USD 1:1로 가정한 뒤 해당일 USD/KRW 기준환율로 환산합니다.
 
 // TaxCopy.costMethods
-빗썸 계정은 이동평균법, 바이낸스·OKX 계정은 선입선출법으로 취득가액을 계산합니다.
+취득가액은 거래소·지갑을 구분하지 않고 **한 사람 단위의 총평균법**으로 계산합니다(소득세법 시행령 제88조제1항). 단가는 그 해가 끝나야 정해지므로, 연말에 더 사면 그해 앞선 처분의 필요경비도 함께 바뀝니다. 계정을 하나라도 빠뜨리면 전체 세액이 틀어집니다.
 ```
 
 ---
@@ -126,7 +126,7 @@ SwiftUI Features
 | **2** | FormatProbe + 바이낸스 3파서 + OKX 2파서 (표 형태 우선) | 합성 fixture import 테스트 green |
 | **3** | 빗썸 PDF 파서 | 합성 텍스트/미니 PDF fixture green |
 | **4** | Transfer matching UI+엔진 | 1건 suggest→confirm |
-| **5** | CostBasis MA+FIFO+TransferCost abandon | 단위+G1 일부 |
+| **5** | CostBasis (당시 MA+FIFO → 지금은 **거주자별 총평균법**) + TransferCost abandon | 단위+G1 일부 |
 | **6** | FX 자동 조회 기본 + 수동/CSV 옵션 + 휴일 직전 고시 | 누락일 UI·sourceDate |
 | **7** | Deemed + Holdings | max 로직 테스트 |
 | **8** | TaxAggregator + Integrity **fail-closed** | V-* 테스트, export 게이트 |
@@ -163,7 +163,7 @@ SwiftUI Features
     USDT 라고 환율로 금액만 환산하면 수수료로 나간 USDT 가 보유에 남아 평단·의제취득가가 어긋난다
     ([audit-2026-08-12-logic.md](./audit-2026-08-12-logic.md) A-02). 장부가 비면 warning 후 0.
   - 수수료 반영은 **과세 여부보다 앞선다** — 2027 이전 거래의 수수료도 지갑에서 실제로 나간다 (A-01).
-  - 순서: 견적자산 지출 → 수수료 지출 → 기초자산 입고 (같은 장부를 두 번 건드리므로 FIFO 결과가 달라진다)
+  - 순서: 견적자산 지출 → 수수료 지출 → 기초자산 입고 (같은 장부를 두 번 건드리므로 재고 부족 판정이 달라진다)
 
 ### 6.4 매도 양도가 KRW
 
