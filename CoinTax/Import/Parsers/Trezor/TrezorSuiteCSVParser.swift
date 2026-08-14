@@ -107,18 +107,31 @@ struct TrezorSuiteCSVParser: ExchangeDocumentParser {
         }
         guard !rows.isEmpty else { throw CoinTaxError.parseRow("Trezor 파일에서 읽을 행이 없습니다") }
 
-        // ── 2) 내 지갑 주소 — 「받은」 행에 찍힌 주소가 내 것이다 ──────────
+        // ── 2) 내 지갑 주소 — 「받은」 행에 찍힌 주소는 **전부** 내 것이다 ──
         //
-        // 이걸 못 찾으면 방향을 `Type` 으로만 판정하게 되는데, 그러면 디파이 예치에서
-        // **받은 영수증 토큰을 보낸 것으로 읽어** 보유가 통째로 틀어진다. 그래서 못 찾으면 막는다.
-        var addressCount: [String: Int] = [:]
+        // 예전에는 받은 행의 주소를 세어 **가장 많이 나온 하나만** 내 주소로 봤다.
+        // 그러면 **비트코인에서 무너진다** — 하드웨어 지갑은 받을 때마다 새 주소를 만들기
+        // 때문에(HD 지갑의 기본 동작) 받은 내역 대부분이 서로 다른 주소로 찍힌다.
+        // 실사용 파일에서 받은 내역 13건이 8개 주소로 흩어져 있었고, 그중 **9건이 「보낸 것」으로
+        // 뒤집혀** 보유가 음수가 됐다 (7차 감사 D-2).
+        //
+        // 받은 행(`RECV`)의 주소는 정의상 내 것이므로 **집합으로** 모은다.
+        var ownAddresses: Set<String> = []
         for r in rows where r.type == "RECV" && !r.address.isEmpty {
-            addressCount[r.address, default: 0] += 1
+            ownAddresses.insert(r.address)
         }
-        guard let ownAddress = addressCount.max(by: { ($0.value, $1.key) < ($1.value, $0.key) })?.key else {
+        // 받은 내역이 한 건도 없으면 방향의 근거가 없다 — 조용히 틀리느니 막는다.
+        guard !ownAddresses.isEmpty else {
             throw CoinTaxError.parserReject(
                 "Trezor 파일에서 내 지갑 주소를 찾지 못했습니다 (받은 내역이 한 건도 없음) — 방향을 판정할 수 없어 가져오지 않습니다"
             )
+        }
+        /// 들어온 것인가.
+        ///
+        /// `RECV` 는 그 자체로 받은 것이다. `SENT` 인데 내 주소로 찍힌 행은 **디파이 예치**처럼
+        /// 「내 지갑이 보낸 트랜잭션인데 그 안에서 내가 받은」 몫이다 — 이때만 주소로 가린다.
+        func isInbound(type: String, address: String) -> Bool {
+            type == "RECV" || ownAddresses.contains(address)
         }
 
         // ── 3) 트랜잭션 단위로 묶어 분류한다 ──────────────────────────────
@@ -156,9 +169,9 @@ struct TrezorSuiteCSVParser: ExchangeDocumentParser {
                 continue
             }
 
-            // (b) 방향 판정 — 주소가 내 지갑이면 들어온 것
-            let inbound = moves.filter { $0.address == ownAddress }
-            let outbound = moves.filter { $0.address != ownAddress }
+            // (b) 방향 판정
+            let inbound = moves.filter { isInbound(type: $0.type, address: $0.address) }
+            let outbound = moves.filter { !isInbound(type: $0.type, address: $0.address) }
 
             // (c) 디파이 예치·인출로 보이는 짝인지 (원자산 ↔ 시세 없는 영수증 토큰)
             let inUnpriced = inbound.contains { !$0.hasFiat }
@@ -172,9 +185,15 @@ struct TrezorSuiteCSVParser: ExchangeDocumentParser {
             var gasAttached = false
             for m in moves {
                 if !m.hasFiat { unpricedAssets.insert(m.asset.code) }
-                let isIn = m.address == ownAddress
-                // 가스비는 그 트랜잭션에서 **한 번만** 붙인다 (여러 행에 나눠 붙이면 이중 계상)
-                let attachGas = !gasAttached && gas != nil && !isIn
+                let isIn = isInbound(type: m.type, address: m.address)
+                // 가스비는 그 트랜잭션에서 **한 번만** 붙인다 (여러 행에 나눠 붙이면 이중 계상).
+                //
+                // 그리고 **보내는 자산과 가스 자산이 같을 때만** 붙인다. USDT 를 보내며 ETH 가스를
+                // 내면 자산이 다른데, 수량 규칙 한 벌(`LedgerDelta.withdrawalFeeQuantity`)은
+                // 「수수료 자산이 보내는 자산과 다르면 장부를 건드리지 않는다」이므로 **가스가
+                // 통째로 사라진다** (7차 감사 D-3 — 실사용 이더리움 파일에서 6건).
+                // 자산이 다르면 아래에서 **별도 출금 이벤트**로 뺀다.
+                let attachGas = !gasAttached && gas?.1 == m.asset && !isIn
                 if attachGas { gasAttached = true }
                 events.append(Self.event(
                     projectID: projectID, accountID: accountID, ts: m.ts,
@@ -189,7 +208,8 @@ struct TrezorSuiteCSVParser: ExchangeDocumentParser {
                     lostForever: false
                 ))
             }
-            // 나가는 행이 없어 가스비를 못 붙였으면 따로 뺀다 (수량이 맞아야 한다)
+            // 가스를 어디에도 못 붙였으면 따로 뺀다 — 나가는 행이 없거나(받기만 한 트랜잭션),
+            // 가스 자산이 보낸 자산과 다른 경우다. 빼지 않으면 장부 수량이 체인과 어긋난다.
             if !gasAttached, let g = gas, let ga = g.1 {
                 events.append(Self.event(
                     projectID: projectID, accountID: accountID, ts: group[0].ts,
@@ -214,7 +234,13 @@ struct TrezorSuiteCSVParser: ExchangeDocumentParser {
         return ParseResult(
             parserID: parserID,
             events: events,
-            meta: ["network": network, "ownAddress": Self.shortHash(ownAddress)],
+            // 비트코인은 받을 때마다 주소가 새로 생겨 내 주소가 여러 개다.
+            // 감사 추적에는 **몇 개를 내 것으로 봤는지**와 대표 하나면 충분하다 (원문은 저장하지 않는다).
+            meta: [
+                "network": network,
+                "ownAddressCount": "\(ownAddresses.count)",
+                "ownAddress": Self.shortHash(ownAddresses.sorted().first ?? "")
+            ],
             warnings: warnings,
             errors: [],
             ignoredCount: ignored
