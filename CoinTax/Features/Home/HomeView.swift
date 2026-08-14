@@ -37,7 +37,9 @@ struct HomeView: View {
             HStack(alignment: .top, spacing: Theme.gapSection) {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack(spacing: 8) {
-                        Text("\(taxYear)년 예상 세액")
+                        // SwiftUI 의 `Text` 보간은 로캘 숫자 형식을 적용한다 — 연도를 그대로 넣으면
+                        // **"2,026년"** 이 된다. 빌드·테스트로는 안 잡히고 화면에서만 보인다.
+                        Text("\(String(taxYear))년 예상 세액")
                             .font(Theme.caption)
                             .foregroundStyle(.secondary)
                         if let pill = statusPill { pill }
@@ -82,7 +84,7 @@ struct HomeView: View {
                     StatTile(label: "과세표준", value: Fmt.krwCompact(c.summary.taxBaseKRW),
                              caption: "소득 − 공제 250만")
                     StatTile(label: "과세 처분", value: "\(c.summary.disposals.count)건",
-                             caption: "\(taxYear)년 양도")
+                             caption: "\(String(taxYear))년 양도")
                 }
             }
         }

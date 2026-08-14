@@ -13,7 +13,7 @@ struct ReportView: View {
     @State private var expandedIssues: Set<String> = []
 
     var body: some View {
-        Page(title: "세금 리포트", subtitle: isPreviewYear ? "\(taxYear)년 거래 손익 · 27년 규정 적용 시" : "\(taxYear)년 귀속 가상자산 기타소득") {
+        Page(title: "세금 리포트", subtitle: isPreviewYear ? "\(String(taxYear))년 거래 손익 · 27년 규정 적용 시" : "\(String(taxYear))년 귀속 가상자산 기타소득") {
             Picker("", selection: $taxYear) {
                 ForEach(env.currentProject?.selectableTaxYears ?? Array(2027...2035), id: \.self) { y in
                     Text(y < TaxTime.taxStartYear ? "\(y)년 (예상)" : "\(y)년").tag(y)
@@ -51,7 +51,7 @@ struct ReportView: View {
             if let message { Banner(text: message, tone: messageTone, systemImage: bannerIcon) }
             if isPreviewYear {
                 Banner(
-                    text: "\(taxYear)년은 과세 시작(2027-01-01) 전이라 실제로 신고할 세금이 아닙니다. 그해 실제 거래 손익에 2027년 규정(기본공제 250만 원 · 세율 22%)을 그대로 적용하면 얼마가 나오는지 보여줍니다.",
+                    text: "\(String(taxYear))년은 과세 시작(2027-01-01) 전이라 실제로 신고할 세금이 아닙니다. 그해 실제 거래 손익에 2027년 규정(기본공제 250만 원 · 세율 22%)을 그대로 적용하면 얼마가 나오는지 보여줍니다.",
                     tone: .neutral, systemImage: "info.circle"
                 )
             }
@@ -72,8 +72,8 @@ struct ReportView: View {
             } else {
                 EmptyState(
                     systemImage: "doc.text.magnifyingglass",
-                    title: "\(taxYear)년은 아직 계산하지 않았습니다",
-                    message: "위의 «계산» 을 누르면 \(taxYear)년 양도분으로 예상 세액을 만듭니다.",
+                    title: "\(String(taxYear))년은 아직 계산하지 않았습니다",
+                    message: "위의 «계산» 을 누르면 \(String(taxYear))년 양도분으로 예상 세액을 만듭니다.",
                     actionTitle: "계산하기"
                 ) { calculate() }
             }
