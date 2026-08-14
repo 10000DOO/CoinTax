@@ -69,7 +69,7 @@ fi
 # 파일이 타깃에서 빠지거나 스위트가 통째로 안 돌면 실패 없이 개수만 줄어든다.
 # 이 앱의 품질 근거가 「N건 초록불」이므로, 개수가 줄면 그 자체가 회귀다.
 # 새 테스트를 추가하면 이 값을 함께 올린다.
-MIN_TESTS=324
+MIN_TESTS=364
 COUNT="$(printf '%s' "$SUMMARY" | sed -nE 's/.*Executed ([0-9]+) tests?.*/\1/p')"
 if [ -n "$COUNT" ] && [ "$COUNT" -lt "$MIN_TESTS" ]; then
   echo "--- 테스트가 $MIN_TESTS 건보다 적게 돌았습니다 ($COUNT 건) — 사라진 테스트가 있습니다 ---"
