@@ -69,9 +69,7 @@
 | [parsers/binance-transaction-history.md](./parsers/binance-transaction-history.md) |
 | [parsers/okx-trading-history.md](./parsers/okx-trading-history.md) |
 | [parsers/okx-funding-history.md](./parsers/okx-funding-history.md) |
-
-> **Trezor Suite CSV 는 스키마 문서가 아직 없다.** 파서 주석
-> (`CoinTax/Import/Parsers/Trezor/TrezorSuiteCSVParser.swift`)이 유일한 근거다.
+| [parsers/trezor-suite-csv.md](./parsers/trezor-suite-csv.md) |
 
 ## 보안
 
