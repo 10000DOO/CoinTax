@@ -19,8 +19,10 @@
 | **빗썸** | 거래내역 확인서 | **PDF only** (엑셀 없음) |
 | **바이낸스** | Spot Trade History | **XLSX** (체결만) |
 | **바이낸스** | Deposit / Withdraw History | **XLSX** (입·출금) |
+| **바이낸스** | Transaction History | **CSV** (`Change` 열 = 거래소가 적은 잔고 변동) |
 | **OKX** | Trading History | **CSV** (Spot + Transfer) |
 | **OKX** | Funding History | **CSV** (Deposit/Withdrawal 등) |
+| **Trezor Suite** | 계정 내역 | **CSV** (하드웨어 지갑 · 온체인) |
 
 상세 스키마: [`parsers/`](./parsers/) · Import 설계: [`04-import-formats.md`](./04-import-formats.md)
 
@@ -30,7 +32,7 @@
 
 | 문서 | 설명 |
 |------|------|
-| [00-tax-law-ssot.md](./00-tax-law-ssot.md) | **세법 백서 (SSOT).** 법령 원문 기반 사실만. 미결사항 19건 별도 정리 |
+| [00-tax-law-ssot.md](./00-tax-law-ssot.md) | **세법 백서 (SSOT).** 법령 원문 기반 사실만. 12장에 미결사항 24건(U-01~U-24), 11.1 에 「10월 고시 나오면 다시 볼 목록」 |
 | [01-requirements.md](./01-requirements.md) | 기능·비기능·MVP |
 | [03-tax-rules.md](./03-tax-rules.md) | 세금 가정 (근거는 00번 문서) |
 | [04-import-formats.md](./04-import-formats.md) | **멀티 포맷 Import** |
@@ -64,8 +66,12 @@
 | [parsers/binance-spot-trade-history.md](./parsers/binance-spot-trade-history.md) |
 | [parsers/binance-withdraw-history.md](./parsers/binance-withdraw-history.md) |
 | [parsers/binance-deposit-history.md](./parsers/binance-deposit-history.md) |
+| [parsers/binance-transaction-history.md](./parsers/binance-transaction-history.md) |
 | [parsers/okx-trading-history.md](./parsers/okx-trading-history.md) |
 | [parsers/okx-funding-history.md](./parsers/okx-funding-history.md) |
+
+> **Trezor Suite CSV 는 스키마 문서가 아직 없다.** 파서 주석
+> (`CoinTax/Import/Parsers/Trezor/TrezorSuiteCSVParser.swift`)이 유일한 근거다.
 
 ## 보안
 
@@ -83,7 +89,7 @@
 ## 실행하기 전에 (개발자)
 
 ```bash
-./scripts/smoke.sh                              # PII 검사 + 빌드 + 테스트 (324건)
+./scripts/smoke.sh                              # PII 검사 + 빌드 + 테스트 (344건)
 python3 scripts/binance-expected-balances.py    # 바이낸스 잔고 정답지 재생성 (실원본 필요)
 ```
 
