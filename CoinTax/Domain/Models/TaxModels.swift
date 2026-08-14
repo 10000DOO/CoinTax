@@ -157,6 +157,12 @@ struct ReplayResult: Sendable {
     /// 전체 기간 부족량을 쓰면 2027 이후에 난 부족까지 봐주게 되어 스냅샷의 진짜 차이를 놓친다.
     var preTaxShortfallQtyByKey: [String: Decimal] = [:]
 
+    /// 과세 시작 시점에 **아직 도착하지 않은 전송**의 수량을 (도착 계정|자산)별로 모은 것.
+    ///
+    /// 이 수량은 어느 계정 장부에도 없지만 거주자는 보유하고 있어 의제취득가 대상이다(§37⑤).
+    /// 검증기가 이걸 모르면 「스냅샷 수량이 이벤트 합과 다르다」로 정상 계산을 막는다.
+    var inFlightQtyByKey: [String: Decimal] = [:]
+
     /// 재고가 부족했던 (계정|자산) 키
     var shortfallKeys: Set<String> { Set(shortfallQtyByKey.keys) }
 }

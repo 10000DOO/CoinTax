@@ -638,12 +638,19 @@ struct CostBasisEngine {
         }()
 
         /// 코인으로 낸 수수료가 취득원가에 더해지면 **단가가 서로를 참조할 수 있다**
-        /// (BNB 로 BTC 수수료를 내고 BTC 로 BNB 수수료를 내는 경우). 몇 번 돌려 수렴시킨다 —
-        /// 수수료는 거래액의 0.1% 수준이라 두세 번이면 1원 미만으로 붙는다.
+        /// (BNB 로 BTC 수수료를 내고 BTC 로 BNB 수수료를 내는 경우). 돌려서 수렴시킨다.
+        ///
+        /// 예전에는 **세 번으로 고정**하고 「수수료는 거래액의 0.1% 수준이라 두세 번이면
+        /// 1원 미만으로 붙는다」고 적어 두었다. 그 전제가 깨지는 자료가 있다 — 수수료가
+        /// 거래액의 몇 %인 소액 거래에서 실측 잔차 **1.37원**이 남았다 (7차 감사 M-1).
+        /// 몇 번이면 되는지는 자료가 정하므로, **값이 굳을 때까지** 돌리고 상한에서 멈춘다.
         func settleConverging(_ years: [Int]) {
             guard !years.isEmpty else { return }
             let target = Set(years)
-            for _ in 0..<3 {
+            // 1원의 1만분의 1. 이보다 작게 움직이면 어떤 끝수 처리에도 영향이 없다.
+            let tolerance = Decimal(string: "0.0001")!
+            var previous: [String: [Int: Decimal]]?
+            for _ in 0..<12 {
                 var derived: [String: [Int: Decimal]] = [:]
                 for f in feeIntoAcquisition where target.contains(f.year) {
                     let unit = pool.unitCost(asset: f.feeAsset, year: f.year) ?? 0
@@ -655,6 +662,15 @@ struct CostBasisEngine {
                     }
                 }
                 pool.settle(years: years)
+                // 키 집합은 `feeIntoAcquisition` 이 정해 매 회 같다 — 값만 비교하면 된다.
+                if let prev = previous, derived.allSatisfy({ asset, byYear in
+                    byYear.allSatisfy { year, cost in
+                        Money.abs(cost - (prev[asset]?[year] ?? 0)) <= tolerance
+                    }
+                }) {
+                    break
+                }
+                previous = derived
             }
         }
 
@@ -667,12 +683,31 @@ struct CostBasisEngine {
         // 봐주게 되어 스냅샷의 진짜 차이를 놓친다.
         let preTaxShortfallQty = shortfallQty
 
-        // 과세 시작 시점에 「이동 중」인 전송이 있으면 그 수량은 어느 계정 장부에도 없다.
-        // 의제취득가(2027-01-01 0시 보유분) 대상에서 빠지므로 사용자가 알아야 한다.
+        // 과세 시작 시점에 「이동 중」인 전송은 **어느 계정 장부에도 없다.**
+        //
+        // 12/30 에 거래소에서 보내 1/2 에 지갑에 도착하면, 보낸 계정에서는 이미 빠졌고
+        // 받는 계정에는 아직 안 들어와 두 장부 어디에도 없다. 그런데 **코인은 계속 내 것이다** —
+        // 체인 위에 떠 있을 뿐이다. `[법]` §37⑤ 는 「2027년 1월 1일 전에 이미 **보유하고 있던**」
+        // 이라고만 하고, 어느 거래소 파일에 찍혀 있는지는 요건이 아니다.
+        //
+        // 예전에는 이 수량을 빼고 2027 기초를 못박았다. 그러면 도착한 뒤에도 풀에는 영영
+        // 안 들어와, 그 자산 **전체**의 원가가 배분 비율만큼 깎였다 (7차 감사 D-1 —
+        // BTC 2개 중 1개가 이동 중이면 필요경비가 2억이 아니라 1억이 되어 세금이 2,200만 원 늘었다).
+        // 그래서 **도착 계정 몫으로 세어** 의제취득가 대상에 넣는다.
+        var inFlightQtyByKey: [String: Decimal] = [:]
+        var inFlightQtyByAsset: [String: Decimal] = [:]
+        var inFlightTargets: [(accID: AccountID, code: String, qty: Decimal)] = []
+        for eventID in pendingArrivals.keys.sorted(by: { $0.raw.uuidString < $1.raw.uuidString }) {
+            guard let pending = pendingArrivals[eventID], let dep = eventsByID[eventID] else { continue }
+            guard pending.qty > Money.qtyEpsilon else { continue }
+            inFlightQtyByAsset[dep.baseAsset.code, default: 0] += pending.qty
+            inFlightQtyByKey[bookKey(dep.accountID, dep.baseAsset), default: 0] += pending.qty
+            inFlightTargets.append((accID: dep.accountID, code: dep.baseAsset.code, qty: pending.qty))
+        }
         if !pendingArrivals.isEmpty {
             issues.append(.init(
                 id: "V-DEM-05", severity: "warning",
-                message: "과세 시작 시점(2027-01-01 0시)에 도착하지 않은 전송이 \(pendingArrivals.count)건 있습니다 — 그 수량은 의제취득가 대상에서 빠집니다 (세액이 커지는 방향)",
+                message: "과세 시작 시점(2027-01-01 0시)에 아직 도착하지 않은 전송이 \(pendingArrivals.count)건 있습니다 — 그 수량도 보유로 보아 의제취득가에 넣고 **도착할 계정 몫**으로 셌습니다. 실제로 도착하지 않은 전송이면 「전송 연결」에서 해제하세요",
                 context: nil
             ))
         }
@@ -693,6 +728,10 @@ struct CostBasisEngine {
                 guard let b = map[code], b.quantity > Money.qtyEpsilon else { continue }
                 qtyByAsset[code, default: 0] += b.quantity
             }
+        }
+        // 이동 중인 수량도 보유다 (위 참조). 이걸 더해야 풀 자신의 2026 기말과 같아진다.
+        for code in inFlightQtyByAsset.keys.sorted() {
+            qtyByAsset[code, default: 0] += inFlightQtyByAsset[code] ?? 0
         }
         var deemedUnitByAsset: [String: Decimal] = [:]
         var bookUnitByAsset: [String: Decimal] = [:]
@@ -716,35 +755,73 @@ struct CostBasisEngine {
             // 풀의 2027 기초를 못박는다. 시가가 없어 의제를 적용하지 못한 자산은
             // 그대로 2026 기말이 이어진다 (실제 산 값으로 계산).
             let total = qtyByAsset[code] ?? 0
+            // 못박는 기초 수량은 **풀 자신의 직전 해 기말 수량과 같아야 한다.**
+            //
+            // 다르면 그 차이만큼 원가가 통째로 생기거나 사라진다 — 그리고 모자란 쪽이면
+            // 배분 비율(`ResidentCostPool.outflowScales`)이 걸려 **그 자산 전체**의 필요경비가
+            // 깎인다. 7차 감사 D-1 이 정확히 이 모양이었는데, 계정별 검증(V-QTY-01)은
+            // 계정 합계만 보므로 통과했다. 여기서만 보인다.
+            let poolClosing = pool.closing(asset: code, year: TaxTime.taxStartYear - 1)?.qty ?? 0
+            if Money.abs(total - poolClosing) > Money.qtyEpsilon {
+                issues.append(.init(
+                    id: "V-DEM-07", severity: "critical",
+                    message: "의제취득가를 적용할 \(code) 수량이 총평균법 장부의 \(TaxTime.taxStartYear - 1)년 기말 수량과 다릅니다 (스냅샷 \(Money.decimalString(total)) / 장부 \(Money.decimalString(poolClosing))) — 이 상태로는 취득가액 전체가 틀어집니다",
+                    context: code
+                ))
+            }
             pool.setOpening(asset: code, year: TaxTime.taxStartYear, qty: total, costKRW: total * unit)
         }
 
         // 스냅샷은 **계정별로** 발행한다 — 검증기(V-DEM-01)가 계정별 수량을 규칙과 대조한다.
         // 단가는 전부 자산 단위 값이라 같은 자산이면 계정이 달라도 같다.
+        //
+        // 이동 중인 전송은 **도착할 계정 몫**으로 합친다. 그 계정에 같은 자산이 이미 있으면
+        // 한 줄로 합쳐야 한다 — 같은 (계정, 자산)으로 두 줄을 내면 검증기가 각 줄을 같은
+        // 기대값과 비교해 정상 계산을 Critical 로 막는다.
         let deemedTargets = books
             .flatMap { accID, map in map.map { (accID, $0.key, $0.value) } }
             .sorted { lhs, rhs in
                 if lhs.1 != rhs.1 { return lhs.1 < rhs.1 }
                 return lhs.0.raw.uuidString < rhs.0.raw.uuidString
             }
+        var snapshotQty: [String: Decimal] = [:]
+        var snapshotOwner: [String: (accID: AccountID, code: String)] = [:]
         for (accID, assetCode, b) in deemedTargets {
             guard b.quantity > Money.qtyEpsilon else { continue }
             guard let unit = deemedUnitByAsset[assetCode] else { continue }
-            let bookUnit = bookUnitByAsset[assetCode] ?? 0
+            let key = bookKey(accID, AssetSymbol(assetCode))
+            snapshotQty[key, default: 0] += b.quantity
+            snapshotOwner[key] = (accID, assetCode)
+            // 계정 장부는 수량만 담당하지만, 재기동해 두어야 이후 재고 검증이 맞는다
+            b.replaceLots([(qty: b.quantity, unitCost: unit)])
+        }
+        for t in inFlightTargets where deemedUnitByAsset[t.code] != nil {
+            let key = bookKey(t.accID, AssetSymbol(t.code))
+            snapshotQty[key, default: 0] += t.qty
+            snapshotOwner[key] = (t.accID, t.code)
+        }
+        // 자산 → 계정 순서를 유지한다 (리포트·CSV 의 표 순서가 실행마다 바뀌면 안 된다)
+        let snapshotKeys = snapshotQty.keys.sorted { lhs, rhs in
+            let l = snapshotOwner[lhs]!, r = snapshotOwner[rhs]!
+            if l.code != r.code { return l.code < r.code }
+            return l.accID.raw.uuidString < r.accID.raw.uuidString
+        }
+        for key in snapshotKeys {
+            guard let owner = snapshotOwner[key], let qty = snapshotQty[key],
+                  let unit = deemedUnitByAsset[owner.code] else { continue }
+            let bookUnit = bookUnitByAsset[owner.code] ?? 0
             deemedPositions.append(DeemedPosition(
-                accountID: accID,
-                asset: AssetSymbol(assetCode),
-                quantity: b.quantity,
+                accountID: owner.accID,
+                asset: AssetSymbol(owner.code),
+                quantity: qty,
                 bookUnitKRW: bookUnit,
-                marketUnitKRW: marketPrices[assetCode],
+                marketUnitKRW: marketPrices[owner.code],
                 deemedUnitKRW: unit,
                 reason: unit > bookUnit ? "market" : "actual",
                 basisMode: policies.deemed.mode.rawValue,
                 lotCount: 1
             ))
-            // 계정 장부는 수량만 담당하지만, 재기동해 두어야 이후 재고 검증이 맞는다
-            b.replaceLots([(qty: b.quantity, unitCost: unit)])
-            deemedKeys.insert(bookKey(accID, AssetSymbol(assetCode)))
+            deemedKeys.insert(key)
         }
 
         process(pass2)
@@ -897,7 +974,8 @@ struct CostBasisEngine {
             fxUsageNotes: fxNotes,
             deemedAppliedKeys: deemedKeys,
             shortfallQtyByKey: shortfallQty,
-            preTaxShortfallQtyByKey: preTaxShortfallQty
+            preTaxShortfallQtyByKey: preTaxShortfallQty,
+            inFlightQtyByKey: inFlightQtyByKey
         )
     }
 }

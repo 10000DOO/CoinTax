@@ -186,15 +186,25 @@ final class OracleTaxPathTests: XCTestCase {
         XCTAssertEqual(s.totalTaxKRW, 0)
     }
 
-    // MARK: - D. 연말을 걸치는 전송 (의제 사각지대)
+    // MARK: - D. 연말을 걸치는 전송도 의제취득가를 받는다
 
+    /// **단정값을 바꿨다 (7차 감사 D-1).** 예전에는 「어느 장부에도 없으니 의제 대상 0건,
+    /// 취득원가 12,870」이 정답이라고 못박고 있었다. 그게 결함이었다 —
+    /// `[법]` §37⑤ 는 「2027년 1월 1일 전에 이미 **보유하고 있던**」만 요구하고,
+    /// 체인 위에서 이동 중인 코인도 그 순간 내 것이다. 어느 거래소 파일에 찍혀 있는지는 요건이 아니다.
+    ///
     /// 손계산:
-    ///   2026-06-01 빗썸 USDT 10 매수 13,000원 (단가 1,300)
+    ///   2026-06-01 빗썸 USDT 10 매수 13,000원 → 2026 총평균단가 13,000 ÷ 10 = 1,300
     ///   2026-12-31 23:00 출금 10 → 2027-01-02 01:00 바이낸스 입금 9.9
-    ///   과세 시작 시점에 어느 장부에도 없다 → 의제 대상 0건 + 경고
-    ///   입고 원가 = 13,000 × (9.9/10) = 12,870
-    ///   2027-06-01 9.9 매도 20,000원 → 소득 20,000 − 12,870 = 7,130
-    func testD_transferAcrossYearEnd_missesDeemed_butWarns() throws {
+    ///     차이 0.1 은 네트워크 수수료로 실제 사라진다 → **2026 년에** 소멸 (원가 1,300 × 0.1 = 130)
+    ///     2026 기말 = 9.9 개 (이동 중이지만 보유)
+    ///   의제취득가 단가 = max(장부 1,300, 시가 1,500) = 1,500      `[법]` §37⑤
+    ///   2027 기초 = 9.9 × 1,500 = 14,850  → 그해 취득이 없으므로 총평균단가도 1,500
+    ///   2027-06-01 9.9 매도 20,000원 → 소득 20,000 − 14,850 = 5,150
+    ///
+    /// 검산(원가 보존): 취득 13,000 + 의제증액 (1,500−1,300)×9.9 = 14,980
+    ///                = 처분원가 14,850 + 소멸 130 + 기말 0  ✓
+    func testD_transferAcrossYearEnd_stillGetsDeemed() throws {
         let policies = PolicyBundle.v1Default
         let projectID = ProjectID()
         let bithumb = Account.defaults(for: .bithumb, projectID: projectID)
@@ -235,12 +245,20 @@ final class OracleTaxPathTests: XCTestCase {
         )
         let replay = try engine.replay(events: [buy, w, d, sell], links: [link])
 
-        XCTAssertTrue(replay.deemedPositions.isEmpty, "이동 중이라 의제 대상이 없다")
+        // 이동 중인 수량은 **도착할 계정 몫**으로 한 줄만 잡힌다 (두 줄로 잡으면 이중 계상)
+        XCTAssertEqual(replay.deemedPositions.count, 1, "이동 중이어도 의제 대상이다")
+        let pos = try XCTUnwrap(replay.deemedPositions.first)
+        XCTAssertEqual(pos.accountID, binance.id, "도착할 계정 몫으로 센다")
+        XCTAssertEqual(pos.quantity, Decimal(string: "9.9")!)
+        XCTAssertEqual(pos.deemedUnitKRW, 1_500, "max(장부 1,300, 시가 1,500)")
         XCTAssertTrue(replay.issues.contains { $0.id == "V-DEM-05" }, "사용자에게 반드시 알려야 한다")
+        XCTAssertFalse(replay.issues.contains { $0.id == "V-DEM-07" }, "스냅샷 수량과 장부 기말이 같아야 한다")
 
         let disp = try XCTUnwrap(replay.disposals.first)
-        XCTAssertEqual(disp.costKRW, 12_870)
-        XCTAssertEqual(disp.pnlKRW, 7_130)
+        XCTAssertEqual(disp.costKRW, 14_850, "9.9 × 의제단가 1,500")
+        XCTAssertEqual(disp.pnlKRW, 5_150, "20,000 − 14,850")
+        // 소멸한 0.1 은 **출금한 해(2026)** 에 잡히고 필요경비가 아니다
+        XCTAssertEqual(replay.abandonedByYear[2026] ?? 0, 130, "1,300 × 0.1")
     }
 
     // MARK: - E. 손실만 난 해 → 다음 해 이익 (이월 금지)

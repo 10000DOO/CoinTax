@@ -359,11 +359,14 @@ enum Verifier {
             // 「부족이 났던 자산」을 통째로 면제하면 1e-8 짜리 먼지 하나로 이 검사가 꺼진다
             // — 의제 스냅샷 수량은 의제취득가의 곱하는 쪽이라 틀리면 취득가 총액이 통째로 틀어진다.
             let preTaxShortfall = r.preTaxShortfallQtyByKey[key] ?? 0
+            // 과세 시작 시점에 아직 도착하지 않은 전송의 수량은 **이벤트로는 아직 안 들어왔지만**
+            // 거주자는 보유하고 있어 스냅샷에 들어간다 (§37⑤ · 엔진 주석 참조).
+            let inFlight = r.inFlightQtyByKey[key] ?? 0
             if let expected = preTaxQty[key],
-               Money.abs((d.quantity - expected) - preTaxShortfall) > Money.qtyEpsilon {
+               Money.abs((d.quantity - expected - inFlight) - preTaxShortfall) > Money.qtyEpsilon {
                 issues.append(.init(
                     id: "V-DEM-01", severity: "critical",
-                    message: "의제 스냅샷 수량이 2027-01-01 0시까지 재생 결과와 다릅니다 (기대 \(Money.decimalString(expected)))",
+                    message: "의제 스냅샷 수량이 2027-01-01 0시까지 재생 결과와 다릅니다 (기대 \(Money.decimalString(expected + inFlight)))",
                     context: d.asset.code
                 ))
             }

@@ -123,7 +123,19 @@ final class AuditFixTests: XCTestCase {
     // MARK: - A-03 전송 도착은 「입금 시각」에 잡힌다 (연말 경계)
 
     /// 2026-12-31 출금 → 2027-01-02 입금.
-    /// 도착분을 출금 시각에 입고하면 아직 오지도 않은 자산에 의제취득가가 붙는다.
+    /// 도착분을 출금 시각에 입고하면 **보낸 계정에** 자산이 남아 의제취득가가 잘못된 계정에 붙는다.
+    ///
+    /// **단정값을 바꿨다 (7차 감사 D-1).** 예전에는 「이동 중이니 의제 대상 0건, 원가 140,000」이
+    /// 정답이라고 못박고 있었다. 그게 결함이었다 — `[법]` §37⑤ 는 「2027년 1월 1일 전에 이미
+    /// **보유하고 있던**」만 요구한다. 체인 위에 떠 있어도 그 순간 내 것이다.
+    ///
+    /// 손계산:
+    ///   USDT 100 을 140,000 에 매수 → 2026 총평균단가 1,400
+    ///   의제단가 = max(1,400, 시가 1,500) = 1,500
+    ///   2027 기초 = 100 × 1,500 = 150,000
+    ///
+    /// 이 테스트가 지키는 것은 **의제 유무가 아니라 귀속 계정**이다 —
+    /// 도착 계정(바이낸스)에 한 줄만 잡혀야 하고, 보낸 계정(빗썸)에는 남으면 안 된다.
     func testTransferArrivesAtDepositTimeNotWithdrawalTime() throws {
         let bithumb = Account.defaults(for: .bithumb, projectID: projectID)
         let binance = Account.defaults(for: .binance, projectID: projectID)
@@ -159,14 +171,19 @@ final class AuditFixTests: XCTestCase {
         )
         let replay = try engine.replay(events: [buy, out, into], links: [link])
 
-        // 2026-12-31 24시 스냅샷에는 두 계정 어디에도 USDT 가 없어야 한다 (이동 중)
-        XCTAssertTrue(replay.deemedPositions.isEmpty, "아직 도착하지 않은 전송에 의제취득가가 붙었다: \(replay.deemedPositions)")
+        // 2026-12-31 24시 스냅샷은 **도착할 계정에 한 줄**이다 — 보낸 계정에 남으면 이중 계상이다
+        XCTAssertEqual(replay.deemedPositions.count, 1, "\(replay.deemedPositions)")
+        let pos = try XCTUnwrap(replay.deemedPositions.first)
+        XCTAssertEqual(pos.accountID, binance.id, "도착할 계정 몫으로 센다 (보낸 계정 아님)")
+        XCTAssertEqual(pos.quantity, 100, "수량이 두 배가 되면 안 된다")
+        XCTAssertEqual(pos.deemedUnitKRW, 1_500, "max(장부 1,400, 시가 1,500)")
         XCTAssertTrue(replay.issues.contains { $0.id == "V-DEM-05" }, "이동 중 전송은 사용자에게 알려야 한다")
 
-        // 그래도 원가는 도착 계정으로 이전된다
+        // 보유는 도착 계정에만 있고, 원가는 의제단가로 다시 선다
+        XCTAssertNil(replay.holdings.rows.first { $0.accountID == bithumb.id }, "보낸 계정에 남으면 안 된다")
         let arrived = try XCTUnwrap(replay.holdings.rows.first { $0.accountID == binance.id })
         XCTAssertEqual(arrived.quantity, 100)
-        XCTAssertEqual(arrived.totalCostKRW, 140_000)
+        XCTAssertEqual(arrived.totalCostKRW, 150_000, "100 × 의제단가 1,500")
     }
 
     /// 거래소 시계 차이로 **입금이 출금보다 먼저** 기록된 전송에서도 원가가 사라지면 안 된다.
